@@ -1,14 +1,21 @@
 [package]
 name = "research-apply-server"
+default-run = "research-apply-server"
 edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+argon2 = "0.5"
 axum = "0.8"
+axum-extra = { version = "0.10", features = ["cookie"] }
+chrono = { version = "0.4", features = ["clock"] }
 dotenvy = "0.15"
 entity = { path = "../entity" }
+cookie = "0.18"
+jsonwebtoken = "9"
+rand_core = { version = "0.6.4", features = ["getrandom"] }
 sea-orm = { version = "2.0.0", features = ["runtime-tokio-rustls", "sqlx-postgres"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -17,6 +24,7 @@ tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
 
 [lints]
 workspace = true

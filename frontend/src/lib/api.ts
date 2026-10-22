@@ -59,6 +59,72 @@ export async function fetchMeta(): Promise<Meta | null> {
   }
 }
 
+export type AuthUser = {
+  id: string;
+  username: string;
+  real_name: string;
+  roles: string[];
+  department_name: string | null;
+};
+
+export type FieldIssue = { field: string; message: string };
+
+export class ApiError extends Error {
+  status: number;
+  fields: FieldIssue[];
+
+  constructor(status: number, message: string, fields: FieldIssue[] = []) {
+    super(message);
+    this.status = status;
+    this.fields = fields;
+  }
+}
+
+export async function loginRequest(username: string, password: string): Promise<AuthUser> {
+  let response: Response;
+  try {
+    response = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ username, password }),
+    });
+  } catch {
+    throw new ApiError(0, "无法连接服务器，请确认后端已启动");
+  }
+
+  const body = (await response.json().catch(() => null)) as { error?: string; user?: AuthUser } | null;
+  if (!response.ok || !body?.user) {
+    throw new ApiError(response.status, body?.error ?? "登录失败");
+  }
+  return body.user;
+}
+
+type ErrorBody = { error?: string; fields?: FieldIssue[] };
+
+export async function apiSend<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  if (init.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  let response: Response;
+  try {
+    response = await fetch(path, { ...init, headers, credentials: "include" });
+  } catch {
+    throw new ApiError(0, "无法连接服务器，请确认后端已启动");
+  }
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  const body = (await response.json().catch(() => null)) as (ErrorBody & T) | null;
+  if (!response.ok) {
+    const fields = body?.fields?.filter((item) => item.message) ?? [];
+    const message = fields.length > 0 ? fields.map((item) => item.message).join("；") : (body?.error ?? "请求失败");
+    throw new ApiError(response.status, message, fields);
+  }
+  return body as T;
+}
+
 export function cycleStatusLabel(status: string): string {
   switch (status) {
     case "open":

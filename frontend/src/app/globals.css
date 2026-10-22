@@ -13,6 +13,37 @@
   --color-indigo: #24344c;
   --color-line: #d8c7ae;
   --color-card: #fffaf3;
+  --color-ink-50: #f4f7f9;
+  --color-ink-100: #e8eef3;
+  --color-ink-200: #d2dde6;
+  --color-ink-300: #aec1d0;
+  --color-ink-400: #7f9bb0;
+  --color-ink-500: #587a94;
+  --color-ink-600: #426078;
+  --color-ink-700: #334c60;
+  --color-ink-800: #22394b;
+  --color-ink-900: #132838;
+  --color-ink-950: #0b1a26;
+  --color-teal-50: #edf8f6;
+  --color-teal-100: #d3efea;
+  --color-teal-200: #a8ded7;
+  --color-teal-300: #72c6bd;
+  --color-teal-400: #3ea79f;
+  --color-teal-500: #218b84;
+  --color-teal-600: #17716c;
+  --color-teal-700: #165b58;
+  --color-teal-800: #154949;
+  --color-teal-900: #143d3e;
+  --color-gold-50: #fbf6ec;
+  --color-gold-100: #f6ead0;
+  --color-gold-200: #ecd3a0;
+  --color-gold-300: #dfb56b;
+  --color-gold-400: #d19a42;
+  --color-gold-500: #b87f2b;
+  --color-gold-600: #996322;
+  --color-gold-700: #7a4c20;
+  --color-gold-800: #653f20;
+  --color-gold-900: #55361e;
 }
 
 html {
@@ -75,4 +106,191 @@ a {
   font-size: 0.92rem;
   letter-spacing: 0.14em;
   transform: rotate(-8deg);
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--color-ink-700);
+}
+
+.field-input,
+.field-textarea {
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-ink-200);
+  background: white;
+  padding: 0.45rem 0.7rem;
+  font-size: 12.5px;
+  color: var(--color-ink-800);
+  outline: none;
+}
+
+.field-input:focus,
+.field-textarea:focus {
+  border-color: var(--color-teal-400);
+  box-shadow: 0 0 0 3px rgb(62 167 159 / 0.15);
+}
+
+.field-input[aria-invalid="true"],
+.field-textarea[aria-invalid="true"],
+.sheet-table input[aria-invalid="true"] {
+  border-color: var(--color-cinnabar);
+  background: #fdf6f6;
+}
+
+.field-textarea {
+  min-height: 6.5rem;
+  resize: vertical;
+  line-height: 1.65;
+}
+
+.sheet-hint {
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--color-ink-400);
+}
+
+.sheet-table {
+  width: 100%;
+  text-align: left;
+  font-size: 11.5px;
+}
+
+.sheet-table th {
+  background: rgb(244 247 249 / 0.8);
+  padding: 0.5rem 0.65rem;
+  font-weight: 500;
+  color: var(--color-ink-500);
+}
+
+.sheet-table td {
+  padding: 0.4rem 0.5rem;
+  border-top: 1px solid var(--color-ink-100);
+  vertical-align: middle;
+}
+
+.metric-sheet {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  overflow: hidden;
+  border: 1px solid var(--color-ink-100);
+  border-radius: 0.75rem;
+  font-size: 12px;
+  color: var(--color-ink-800);
+}
+
+.metric-sheet th,
+.metric-sheet td {
+  border-right: 1px solid var(--color-ink-100);
+  border-bottom: 1px solid var(--color-ink-100);
+  padding: 0.42rem 0.4rem;
+  text-align: center;
+  vertical-align: middle;
+  font-weight: 500;
+  line-height: 1.4;
+  background: white;
+}
+
+.metric-sheet th {
+  background: #f7fafb;
+  color: var(--color-ink-600);
+  font-weight: 600;
+}
+
+.metric-sheet tr:last-child td,
+.metric-sheet tr:last-child th {
+  border-bottom: 0;
+}
+
+.metric-sheet th:last-child,
+.metric-sheet td:last-child {
+  border-right: 0;
+}
+
+.metric-sheet .band {
+  background: #eef6f5;
+  padding: 0.5rem 0.75rem;
+  color: var(--color-teal-800);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.metric-sheet .side {
+  width: 18%;
+  background: #f4f8f7;
+  color: var(--color-ink-800);
+}
+
+.metric-sheet td.blocked {
+  background: #f6f8f9;
+}
+
+.metric-sheet .cap {
+  display: block;
+  margin-bottom: 0.15rem;
+}
+
+.metric-sheet input[type="number"] {
+  display: block;
+  width: 5.5rem;
+  margin: 0.05rem auto;
+  border: 0;
+  border-bottom: 1.5px solid var(--color-ink-200);
+  border-radius: 0;
+  background: transparent;
+  padding: 0.12rem 0.15rem 0.18rem;
+  text-align: center;
+  font-size: 13px;
+  color: var(--color-ink-800);
+  outline: none;
+  box-shadow: none;
+}
+
+.metric-sheet input[type="number"]:focus {
+  border-bottom-color: var(--color-teal-600);
+}
+
+.metric-sheet input[type="number"]::placeholder {
+  color: var(--color-ink-300);
+}
+
+.metric-sheet input,
+.metric-sheet textarea {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: center;
+  font-size: 13px;
+  outline: none;
+  padding: 0.1rem;
+}
+
+.metric-sheet textarea {
+  min-height: 7.5rem;
+  padding: 0.35rem 0.45rem;
+  text-align: left;
+  resize: vertical;
+  line-height: 1.65;
+}
+
+.metric-sheet input:disabled,
+.metric-sheet textarea:disabled {
+  color: inherit;
+}
+
+.sheet-table input,
+.sheet-table select {
+  width: 100%;
+  border-radius: 0.375rem;
+  border: 1px solid var(--color-ink-200);
+  background: white;
+  padding: 0.3rem 0.45rem;
+  font-size: 11.5px;
+  outline: none;
 }

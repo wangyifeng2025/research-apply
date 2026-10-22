@@ -1,5 +1,5 @@
-import { ReviewDesk } from "@/components/review-desk";
+import { DepartmentWorkspace } from "@/components/department-workspace";
 
 export default function DepartmentReviewPage() {
-  return <ReviewDesk stage="department" />;
+  return <DepartmentWorkspace />;
 }

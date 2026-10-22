@@ -70,6 +70,7 @@ createdb research_apply_db
 cd backend
 cp .env.example .env            # 按本机修改 DATABASE_URL
 cargo run -p migration -- up    # 建表、写入经费科目和 2026 批次
+cargo run -p research-apply-server --bin seed
 cargo run -p research-apply-server
 ```
 
@@ -89,7 +90,7 @@ npm install
 npm run dev
 ```
 
-打开 <http://localhost:3000>，首页会显示数据库连接状态和当前批次。
+打开 <http://localhost:3000> 即进入登录页。前端把 `/api` 同源转发到后端，登录 Cookie 因此可以写入浏览器。教师进入「我的申报」，系审核人、科研处、专家分别进入对应审核台，管理员进入 `/admin`。
 
 ## 当前进度
 
@@ -99,7 +100,7 @@ npm run dev
 | SeaORM 实体 | 已生成 |
 | 后端骨架：配置、错误处理、CORS、日志、`/health`、`/api/meta` | 已完成 |
 | 前端骨架：首页、申报入口、两类申报书栏目说明、三个审核台静态页 | 已完成 |
-| 登录与权限 | 待开发 |
+| 登录与权限 | 已完成：种子账号、JWT Cookie、按角色进入页面 |
 | 申报书填写与提交接口、表单 | 待开发 |
 | 三级审核与盲审接口、页面 | 待开发 |
 | 统计、导出、通知 | 待开发 |
@@ -113,6 +114,7 @@ npm run dev
 | 后端检查 | `cargo check --workspace` |
 | 后端测试 | `cargo test --workspace` |
 | 后端 lint | `cargo clippy --workspace --all-targets` |
+| 演示数据 | `cargo run -p research-apply-server --bin seed` |
 | 迁移状态 | `cargo run -p migration -- status` |
 | 重建数据库 | `cargo run -p migration -- fresh` |
 | 前端 lint | `npm run lint` |

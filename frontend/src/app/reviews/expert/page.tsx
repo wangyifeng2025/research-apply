@@ -1,5 +1,5 @@
-import { ReviewDesk } from "@/components/review-desk";
+import { ExpertWorkspace } from "@/components/expert-workspace";
 
 export default function ExpertReviewPage() {
-  return <ReviewDesk stage="expert" />;
+  return <ExpertWorkspace />;
 }

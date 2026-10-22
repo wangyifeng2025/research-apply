@@ -10,11 +10,12 @@ npm install
 npm run dev
 ```
 
-打开 <http://localhost:3000>。后端需先启动（见 [../backend/README.md](../backend/README.md)），否则首页会显示"等待数据库"。
+打开 <http://localhost:3000> 即进入登录页，左侧显示当前批次和数据库连接。后端需先启动（见 [../backend/README.md](../backend/README.md)）。
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `NEXT_PUBLIC_API_BASE` | `http://127.0.0.1:8080` | 后端地址；后端的 `CORS_ORIGIN` 要与前端地址一致 |
+| `NEXT_PUBLIC_API_BASE` | `http://127.0.0.1:8080` | 服务端组件读取 `/health`、`/api/meta` 的后端地址 |
+| `API_PROXY_TARGET` | `http://127.0.0.1:8080` | 浏览器请求 `/api/*` 时的转发目标，登录走这条路径以携带 Cookie |
 
 ## 目录结构
 
@@ -22,7 +23,8 @@ npm run dev
 src/
 ├── app/
 │   ├── layout.tsx                     根布局
-│   ├── page.tsx                       首页：批次、服务状态、两类申报入口
+│   ├── page.tsx                       网站入口：登录页
+│   ├── login/page.tsx                 转到 /
 │   ├── globals.css                    主题色变量与全局样式
 │   ├── applications/
 │   │   ├── page.tsx                   我的申报
@@ -33,7 +35,6 @@ src/
 │       ├── office/page.tsx            科研处审核
 │       └── expert/page.tsx            专家盲审
 ├── components/
-│   ├── site-frame.tsx                 页头与导航
 │   ├── cover-fields.tsx               申报书封面字段
 │   ├── section-list.tsx               申报书栏目列表
 │   └── review-desk.tsx                三个审核台的公共页面
@@ -46,8 +47,8 @@ src/
 
 ## 当前进度
 
-- 已完成：首页（读取 `/health`、`/api/meta`）、申报入口、两类申报书栏目说明页、三个审核台静态页；
-- 待开发：登录与按角色导航、分栏目表单、子表增删行组件、预算表、审核操作、专家匿名视图、统计看板、管理页面。
+- 已完成：登录页（接入 `POST /api/auth/login`，左侧显示批次和数据库连接）、按角色进入的工作台；
+- 待开发：分栏目表单、子表增删行组件、预算表、审核操作、专家匿名视图、统计看板、管理页面。
 
 规划的路由见需求文档第八节。
 

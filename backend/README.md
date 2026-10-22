@@ -13,13 +13,18 @@ Rust + Axum + SeaORM + PostgreSQL。业务需求见 [../docs/requirements.md](..
 ```text
 server/src/
 ├── main.rs        启动：读取 .env、初始化日志、连接数据库、监听端口
+├── bin/seed.rs    演示账号与开放 2026 批次
 ├── config.rs      环境变量
 ├── state.rs       AppState（数据库连接池）
 ├── error.rs       AppError 及统一错误响应
+├── auth/          密码、JWT Cookie、CurrentUser、require_role
+├── services/      登录业务
+├── support/       审计写入、时间
 └── routes/
     ├── mod.rs     路由表、CORS、TraceLayer
     ├── health.rs  GET /health
-    └── meta.rs    GET /api/meta
+    ├── meta.rs    GET /api/meta
+    └── auth.rs    登录、退出、当前用户
 ```
 
 ## 配置
@@ -29,8 +34,10 @@ server/src/
 | 变量 | 必填 | 默认值 | 说明 |
 |---|---|---|---|
 | `DATABASE_URL` | 是 | — | 如 `postgres://user:password@127.0.0.1:5432/research_apply_db` |
+| `JWT_SECRET` | 是 | — | 签发登录 Cookie 的密钥，生产环境必须更换 |
 | `SERVER_BIND` | 否 | `127.0.0.1:8080` | 监听地址 |
-| `CORS_ORIGIN` | 否 | `http://localhost:3000` | 允许跨域的前端地址 |
+| `CORS_ORIGIN` | 否 | `http://localhost:3000` | 允许跨域的前端地址，登录需允许携带 Cookie |
+| `COOKIE_SECURE` | 否 | 关闭 | 设为 `true` 时登录 Cookie 只在 HTTPS 下发送 |
 | `RUST_LOG` | 否 | `info,tower_http=info` | 日志级别 |
 
 `server` 和 `migration` 都会读取当前目录下的 `.env`，以下命令均在 `backend/` 目录执行。
@@ -75,20 +82,28 @@ sea-orm-cli generate entity \
 
 ## 运行
 
+先写入演示数据（可重复执行，会重置演示账号密码并重新开放 2026 批次）：
+
 ```bash
+cargo run -p research-apply-server --bin seed
 cargo run -p research-apply-server
 ```
 
 | 接口 | 说明 |
 |---|---|
-| `GET /health` | 健康检查，数据库不可用时返回 503 |
+| `GET /health` | 健康检查；数据库不可用时返回 500，响应体不包含 SQL |
 | `GET /api/meta` | 当前数据库名、审核流程、项目类别、最新批次、经费科目数，供前端首页使用 |
+| `POST /api/auth/login` | 校验账号密码与 `is_active`，写入 HttpOnly Cookie，有效期 8 小时 |
+| `POST /api/auth/logout` | 清除登录 Cookie |
+| `GET /api/auth/me` | 当前用户资料与角色；无令牌返回 401 |
+
+演示账号见种子命令的输出。密码使用 argon2，日志不记录密码。后续需要按角色拦截的接口调用 `require_role`：管理员可执行任一角色的操作，角色不符返回 403。
 
 规划中的接口见需求文档第七节。
 
 ## 开发约定
 
-- 错误统一走 `AppError`，响应体为 `{ "error": "中文说明" }`，不向前端暴露数据库错误细节；
+- 错误统一走 `AppError`，响应体为 `{ "error": "中文说明", "fields": [...] }`，不向前端暴露数据库错误细节；唯一约束冲突返回 409；
 - 状态流转只在服务层做，更新时带旧状态条件，多表写入放进事务；
 - 专家相关接口使用独立 DTO，不包含负责人、参加者、推荐人等身份字段；
 - 迁移中不写触发器和存储函数；业务校验在服务层完成并返回字段级错误（422），数据库约束只作兜底，被触发说明服务层有遗漏；
