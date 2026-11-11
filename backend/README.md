@@ -97,7 +97,7 @@ cargo run -p research-apply-server
 | `POST /api/auth/logout` | 清除登录 Cookie |
 | `GET /api/auth/me` | 当前用户资料与角色；无令牌返回 401 |
 
-演示账号见种子命令的输出。密码使用 argon2，日志不记录密码。后续需要按角色拦截的接口调用 `require_role`：管理员可执行任一角色的操作，角色不符返回 403。
+测试账号由种子命令打印，清单见 [../docs/科研处测试说明.md](../docs/科研处测试说明.md)。密码使用 argon2，日志不记录密码。登录页不预填账号。需要按角色拦截的接口调用 `require_role`：管理员可执行任一角色的操作，角色不符返回 403。
 
 规划中的接口见需求文档第七节。
 

@@ -22,6 +22,12 @@ struct DemoUser {
     employee_no: &'static str,
     department: &'static str,
     role: UserRole,
+    gender: Option<&'static str>,
+    professional_title: Option<&'static str>,
+    research_expertise: Option<&'static str>,
+    education: Option<&'static str>,
+    degree: Option<&'static str>,
+    phone: Option<&'static str>,
 }
 
 const USERS: &[DemoUser] = &[
@@ -32,6 +38,12 @@ const USERS: &[DemoUser] = &[
         employee_no: "T2026001",
         department: "EM",
         role: UserRole::Teacher,
+        gender: Some("男"),
+        professional_title: Some("副教授"),
+        research_expertise: Some("区域经济"),
+        education: Some("研究生"),
+        degree: Some("硕士"),
+        phone: Some("13700001001"),
     },
     DemoUser {
         username: "chenxia",
@@ -40,6 +52,12 @@ const USERS: &[DemoUser] = &[
         employee_no: "T2026002",
         department: "IE",
         role: UserRole::Teacher,
+        gender: Some("女"),
+        professional_title: Some("讲师"),
+        research_expertise: Some("计算机应用"),
+        education: Some("本科"),
+        degree: Some("学士"),
+        phone: Some("13700001002"),
     },
     DemoUser {
         username: "liwenbo",
@@ -48,6 +66,26 @@ const USERS: &[DemoUser] = &[
         employee_no: "D2026001",
         department: "EM",
         role: UserRole::DepartmentReviewer,
+        gender: None,
+        professional_title: Some("教授"),
+        research_expertise: Some("区域经济"),
+        education: None,
+        degree: None,
+        phone: None,
+    },
+    DemoUser {
+        username: "tangwei",
+        password: "dept2026",
+        real_name: "唐伟",
+        employee_no: "D2026002",
+        department: "IE",
+        role: UserRole::DepartmentReviewer,
+        gender: None,
+        professional_title: Some("副教授"),
+        research_expertise: Some("计算机应用"),
+        education: None,
+        degree: None,
+        phone: None,
     },
     DemoUser {
         username: "wanghaining",
@@ -56,6 +94,12 @@ const USERS: &[DemoUser] = &[
         employee_no: "O2026001",
         department: "RO",
         role: UserRole::ResearchOffice,
+        gender: None,
+        professional_title: None,
+        research_expertise: None,
+        education: None,
+        degree: None,
+        phone: None,
     },
     DemoUser {
         username: "expert-e016",
@@ -64,6 +108,26 @@ const USERS: &[DemoUser] = &[
         employee_no: "E2026016",
         department: "RO",
         role: UserRole::Expert,
+        gender: None,
+        professional_title: Some("教授"),
+        research_expertise: Some("区域经济"),
+        education: None,
+        degree: None,
+        phone: None,
+    },
+    DemoUser {
+        username: "expert-e017",
+        password: "review2026",
+        real_name: "匿名专家E-017",
+        employee_no: "E2026017",
+        department: "RO",
+        role: UserRole::Expert,
+        gender: None,
+        professional_title: Some("教授"),
+        research_expertise: Some("计算机应用"),
+        education: None,
+        degree: None,
+        phone: None,
     },
     DemoUser {
         username: "zhoujin",
@@ -72,6 +136,12 @@ const USERS: &[DemoUser] = &[
         employee_no: "A2026001",
         department: "RO",
         role: UserRole::Admin,
+        gender: None,
+        professional_title: None,
+        research_expertise: None,
+        education: None,
+        degree: None,
+        phone: None,
     },
 ];
 
@@ -98,6 +168,7 @@ pub async fn run() -> Result<(), AppError> {
     }
     open_cycle(&db).await?;
     println!("2026年院级科研项目申报 已开放");
+    println!("以上为测试账号。正式使用前必须更换全部密码，不要把密码写在登录页。");
     Ok(())
 }
 
@@ -144,6 +215,12 @@ async fn ensure_user(
         model.real_name = Set(demo.real_name.to_owned());
         model.employee_no = Set(Some(demo.employee_no.to_owned()));
         model.department_id = Set(department_id);
+        model.gender = Set(owned(demo.gender));
+        model.professional_title = Set(owned(demo.professional_title));
+        model.research_expertise = Set(owned(demo.research_expertise));
+        model.education = Set(owned(demo.education));
+        model.degree = Set(owned(demo.degree));
+        model.phone = Set(owned(demo.phone));
         model.is_active = Set(true);
         model.updated_at = Set(timestamp);
         model.update(db).await?;
@@ -157,6 +234,12 @@ async fn ensure_user(
             real_name: Set(demo.real_name.to_owned()),
             employee_no: Set(Some(demo.employee_no.to_owned())),
             department_id: Set(department_id),
+            gender: Set(owned(demo.gender)),
+            professional_title: Set(owned(demo.professional_title)),
+            research_expertise: Set(owned(demo.research_expertise)),
+            education: Set(owned(demo.education)),
+            degree: Set(owned(demo.degree)),
+            phone: Set(owned(demo.phone)),
             is_active: Set(true),
             created_at: Set(timestamp),
             updated_at: Set(timestamp),
@@ -211,6 +294,10 @@ fn shanghai(
         .with_ymd_and_hms(year, month, day, 0, 0, 0)
         .single()
         .ok_or_else(|| AppError::Internal("批次时间无效".to_owned()))
+}
+
+fn owned(value: Option<&str>) -> Option<String> {
+    value.map(str::to_owned)
 }
 
 fn role_label(role: &UserRole) -> &'static str {

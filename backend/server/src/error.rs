@@ -27,6 +27,8 @@ pub enum AppError {
     NotFound(String),
     #[error("{0}")]
     Conflict(String),
+    #[error("{0}")]
+    PayloadTooLarge(String),
     #[error("提交的数据未通过校验")]
     Validation(Vec<FieldError>),
     #[error(transparent)]
@@ -35,6 +37,8 @@ pub enum AppError {
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Internal(String),
+    #[error("{0}")]
+    Unavailable(String),
 }
 
 impl AppError {
@@ -45,9 +49,10 @@ impl AppError {
             Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Database(error) if is_unique_violation(error) => StatusCode::CONFLICT,
-            Self::Database(_) | Self::Io(_) | Self::Internal(_) => {
+            Self::Database(_) | Self::Io(_) | Self::Internal(_) | Self::Unavailable(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
             Self::MissingEnv(_) | Self::InvalidCorsOrigin(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -57,6 +62,7 @@ impl AppError {
     fn client_message(&self) -> String {
         match self {
             Self::Database(error) if is_unique_violation(error) => "数据已存在".to_owned(),
+            Self::Unavailable(message) => message.clone(),
             Self::Database(_)
             | Self::Io(_)
             | Self::Internal(_)

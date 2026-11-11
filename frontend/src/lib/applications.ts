@@ -1,4 +1,4 @@
-import { apiSend } from "@/lib/api";
+import { ApiError, apiSend } from "@/lib/api";
 
 export type ProjectClassCode = "social" | "natural" | "dual_high";
 
@@ -9,6 +9,7 @@ export type MineItem = {
   status: string;
   updated_at: string;
   submitted_at: string | null;
+  conclusion_opinion: string | null;
 };
 
 export type MemberInput = {
@@ -157,6 +158,25 @@ export type ApplicationDetail = {
     funding_source: string | null;
     purpose: string | null;
   }>;
+  conclusion_opinion: string | null;
+  attachments: AttachmentItem[];
+};
+
+export type AttachmentKind = "signature" | "supporting" | "other";
+
+export type AttachmentItem = {
+  id: string;
+  kind: AttachmentKind;
+  file_name: string;
+  content_type: string;
+  byte_size: number;
+  created_at: string;
+};
+
+export const attachmentKindLabels: Record<AttachmentKind, string> = {
+  signature: "推荐人签字扫描件",
+  supporting: "成果证明材料",
+  other: "其他",
 };
 
 export const statusLabels: Record<string, string> = {
@@ -215,4 +235,50 @@ export function withdrawApplication(id: string): Promise<ApplicationDetail> {
 
 export function deleteDraft(id: string): Promise<void> {
   return apiSend(`/api/applications/${id}`, { method: "DELETE" });
+}
+
+export function uploadAttachment(id: string, kind: AttachmentKind, file: File): Promise<AttachmentItem> {
+  const body = new FormData();
+  body.set("kind", kind);
+  body.set("file", file);
+  return apiSend(`/api/applications/${id}/attachments`, { method: "POST", body });
+}
+
+export function deleteAttachment(id: string, attachmentId: string): Promise<void> {
+  return apiSend(`/api/applications/${id}/attachments/${attachmentId}`, { method: "DELETE" });
+}
+
+export async function downloadApplicationPdf(id: string): Promise<void> {
+  const response = await fetch(`/api/applications/${id}/form.pdf`, { credentials: "include" });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new ApiError(response.status, body?.error ?? "导出申报书失败");
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+  const fileName = encoded ? decodeURIComponent(encoded) : "申报书.pdf";
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+export async function downloadAttachment(id: string, attachment: AttachmentItem): Promise<void> {
+  const response = await fetch(`/api/applications/${id}/attachments/${attachment.id}`, {
+    credentials: "include",
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new ApiError(response.status, body?.error ?? "下载失败");
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = attachment.file_name;
+  link.click();
+  URL.revokeObjectURL(url);
 }

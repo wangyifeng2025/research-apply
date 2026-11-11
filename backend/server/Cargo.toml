@@ -8,7 +8,7 @@ version.workspace = true
 
 [dependencies]
 argon2 = "0.5"
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 axum-extra = { version = "0.10", features = ["cookie"] }
 chrono = { version = "0.4", features = ["clock"] }
 dotenvy = "0.15"
@@ -20,11 +20,19 @@ sea-orm = { version = "2.0.0", features = ["runtime-tokio-rustls", "sqlx-postgre
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rust_xlsxwriter = "0.79"
+subsetter = "0.2"
+ttf-parser = "0.25"
 uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+migration = { path = "../migration" }
+tower = { version = "0.5", features = ["util"] }
 
 [lints]
 workspace = true

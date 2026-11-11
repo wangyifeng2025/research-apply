@@ -6,7 +6,6 @@
 
 use chrono::NaiveDate;
 use entity::application_budgets;
-use entity::application_cycles;
 use entity::application_members;
 use entity::applications;
 use entity::budget_subjects;
@@ -19,7 +18,7 @@ use entity::ns_schedules;
 use entity::recommenders;
 use entity::reviews;
 use entity::sea_orm_active_enums::{
-    ApplicationStatus, BudgetFamily, CycleStatus, OutputKind, ProjectClass, ReviewStage, UserRole,
+    ApplicationStatus, BudgetFamily, OutputKind, ProjectClass, ReviewStage, UserRole,
 };
 use entity::ss_designs;
 use entity::ss_expected_outputs;
@@ -28,8 +27,8 @@ use entity::ss_prior_achievements;
 use entity::users;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveEnum, ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, EntityTrait,
-    QueryFilter, QueryOrder, Set, TransactionTrait,
+    ActiveEnum, ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction,
+    EntityTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -37,6 +36,7 @@ use uuid::Uuid;
 
 use crate::auth::CurrentUser;
 use crate::error::{AppError, FieldError};
+use crate::services::cycles;
 use crate::state::AppState;
 use crate::support::audit::{AuditEntry, record};
 use crate::support::time::now;
@@ -49,6 +49,7 @@ pub struct MineItem {
     pub status: String,
     pub updated_at: String,
     pub submitted_at: Option<String>,
+    pub conclusion_opinion: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -85,6 +86,8 @@ pub struct ApplicationView {
     pub ns_indicators: IndicatorView,
     pub ns_schedules: Vec<ScheduleView>,
     pub ns_equipments: Vec<EquipmentView>,
+    pub conclusion_opinion: Option<String>,
+    pub attachments: Vec<crate::services::attachments::AttachmentView>,
 }
 
 #[derive(Debug, Serialize)]
@@ -246,12 +249,16 @@ pub struct CreateInput {
     pub project_class: String,
 }
 
-pub async fn create(state: &AppState, user: &CurrentUser, input: CreateInput) -> Result<ApplicationView, AppError> {
+pub async fn create(
+    state: &AppState,
+    user: &CurrentUser,
+    input: CreateInput,
+) -> Result<ApplicationView, AppError> {
     if !user.has_role(UserRole::Teacher) {
         return Err(AppError::Forbidden("只有教师可以新建申报书".to_owned()));
     }
     let class = parse_class(&input.project_class)?;
-    let cycle = open_cycle(&state.db).await?;
+    let cycle = cycles::require_current_open(&state.db).await?;
     let profile = users::Entity::find_by_id(user.id)
         .one(&state.db)
         .await?
@@ -304,17 +311,23 @@ pub async fn mine(db: &DatabaseConnection, user: &CurrentUser) -> Result<Vec<Min
             status: status_code(&row.status).to_owned(),
             updated_at: row.updated_at.to_rfc3339(),
             submitted_at: row.submitted_at.map(|value| value.to_rfc3339()),
+            conclusion_opinion: row.conclusion_opinion,
         })
         .collect())
 }
 
-pub async fn detail(db: &DatabaseConnection, user: &CurrentUser, id: Uuid) -> Result<ApplicationView, AppError> {
+pub async fn detail(
+    db: &DatabaseConnection,
+    user: &CurrentUser,
+    id: Uuid,
+) -> Result<ApplicationView, AppError> {
     let app = load_owned(db, user, id).await?;
     let _ = app;
     load_view(db, id).await
 }
 
 pub async fn delete_draft(state: &AppState, user: &CurrentUser, id: Uuid) -> Result<(), AppError> {
+    let stored = crate::services::attachments::storage_keys(&state.db, id).await?;
     let result = applications::Entity::delete_many()
         .filter(applications::Column::Id.eq(id))
         .filter(applications::Column::PrincipalId.eq(user.id))
@@ -332,6 +345,7 @@ pub async fn delete_draft(state: &AppState, user: &CurrentUser, id: Uuid) -> Res
         };
     }
     write_audit(state, user.id, "application_deleted", id).await;
+    crate::services::attachments::remove_stored(&state.config.attachment_dir, &stored).await;
     Ok(())
 }
 
@@ -367,7 +381,12 @@ pub async fn save_section(
     Ok(())
 }
 
-pub async fn submit(state: &AppState, user: &CurrentUser, id: Uuid, accepted: bool) -> Result<ApplicationView, AppError> {
+pub async fn submit(
+    state: &AppState,
+    user: &CurrentUser,
+    id: Uuid,
+    accepted: bool,
+) -> Result<ApplicationView, AppError> {
     if !accepted {
         return Err(invalid("commitment_accepted", "提交前必须确认申请者承诺"));
     }
@@ -375,19 +394,27 @@ pub async fn submit(state: &AppState, user: &CurrentUser, id: Uuid, accepted: bo
     ensure_editable(&app)?;
     if !matches!(
         app.status,
-        ApplicationStatus::Draft | ApplicationStatus::DeptReturned | ApplicationStatus::OfficeReturned
+        ApplicationStatus::Draft
+            | ApplicationStatus::DeptReturned
+            | ApplicationStatus::OfficeReturned
     ) {
         return Err(AppError::Conflict("当前状态不能提交".to_owned()));
     }
-    validate_for_submit(&state.db, &app).await?;
     if app.status == ApplicationStatus::Draft {
-        let _ = open_cycle(&state.db).await?;
+        cycles::ensure_open(&state.db, app.cycle_id).await?;
     }
+    validate_for_submit(&state.db, &app).await?;
     let timestamp = now();
     let result = applications::Entity::update_many()
-        .col_expr(applications::Column::Status, Expr::value(ApplicationStatus::Submitted.to_value()))
+        .col_expr(
+            applications::Column::Status,
+            Expr::value(ApplicationStatus::Submitted.to_value()),
+        )
         .col_expr(applications::Column::CommitmentAccepted, Expr::value(true))
-        .col_expr(applications::Column::CommitmentAcceptedAt, Expr::value(timestamp))
+        .col_expr(
+            applications::Column::CommitmentAcceptedAt,
+            Expr::value(timestamp),
+        )
         .col_expr(applications::Column::SubmittedAt, Expr::value(timestamp))
         .col_expr(applications::Column::UpdatedAt, Expr::value(timestamp))
         .filter(applications::Column::Id.eq(id))
@@ -400,16 +427,24 @@ pub async fn submit(state: &AppState, user: &CurrentUser, id: Uuid, accepted: bo
         .exec(&state.db)
         .await?;
     if result.rows_affected == 0 {
-        return Err(AppError::Conflict("申报书状态已变化，请刷新后重试".to_owned()));
+        return Err(AppError::Conflict(
+            "申报书状态已变化，请刷新后重试".to_owned(),
+        ));
     }
     write_audit(state, user.id, "application_submitted", id).await;
     load_view(&state.db, id).await
 }
 
-pub async fn withdraw(state: &AppState, user: &CurrentUser, id: Uuid) -> Result<ApplicationView, AppError> {
+pub async fn withdraw(
+    state: &AppState,
+    user: &CurrentUser,
+    id: Uuid,
+) -> Result<ApplicationView, AppError> {
     let app = load_owned(&state.db, user, id).await?;
     if app.status != ApplicationStatus::Submitted {
-        return Err(AppError::Conflict("只有待系审核的申报书可以撤回".to_owned()));
+        return Err(AppError::Conflict(
+            "只有待系审核的申报书可以撤回".to_owned(),
+        ));
     }
     let reviewed = reviews::Entity::find()
         .filter(reviews::Column::ApplicationId.eq(id))
@@ -421,15 +456,23 @@ pub async fn withdraw(state: &AppState, user: &CurrentUser, id: Uuid) -> Result<
     }
     let timestamp = now();
     let result = applications::Entity::update_many()
-        .col_expr(applications::Column::Status, Expr::value(ApplicationStatus::Draft.to_value()))
-        .col_expr(applications::Column::SubmittedAt, Expr::value(Option::<chrono::DateTime<chrono::FixedOffset>>::None))
+        .col_expr(
+            applications::Column::Status,
+            Expr::value(ApplicationStatus::Draft.to_value()),
+        )
+        .col_expr(
+            applications::Column::SubmittedAt,
+            Expr::value(Option::<chrono::DateTime<chrono::FixedOffset>>::None),
+        )
         .col_expr(applications::Column::UpdatedAt, Expr::value(timestamp))
         .filter(applications::Column::Id.eq(id))
         .filter(applications::Column::Status.eq(ApplicationStatus::Submitted))
         .exec(&state.db)
         .await?;
     if result.rows_affected == 0 {
-        return Err(AppError::Conflict("申报书状态已变化，请刷新后重试".to_owned()));
+        return Err(AppError::Conflict(
+            "申报书状态已变化，请刷新后重试".to_owned(),
+        ));
     }
     write_audit(state, user.id, "application_withdrawn", id).await;
     load_view(&state.db, id).await
@@ -455,7 +498,11 @@ pub async fn subjects(db: &DatabaseConnection, family: &str) -> Result<Vec<Subje
         .collect())
 }
 
-async fn save_basic(txn: &DatabaseTransaction, app: &applications::Model, body: Value) -> Result<(), AppError> {
+async fn save_basic(
+    txn: &DatabaseTransaction,
+    app: &applications::Model,
+    body: Value,
+) -> Result<(), AppError> {
     #[derive(Deserialize)]
     struct Input {
         title: Option<String>,
@@ -482,16 +529,68 @@ async fn save_basic(txn: &DatabaseTransaction, app: &applications::Model, body: 
     if keyword_count(input.keywords.as_deref().unwrap_or("")) > 5 {
         push_issue(&mut issues, "keywords", "关键词最多 5 个，请用分号隔开");
     }
-    let filled_on = take_date(&mut issues, input.filled_on.as_deref(), "filled_on", "填表日期");
-    let birth_date = take_date(&mut issues, input.birth_date.as_deref(), "birth_date", "出生年月");
+    let filled_on = take_date(
+        &mut issues,
+        input.filled_on.as_deref(),
+        "filled_on",
+        "填表日期",
+    );
+    let birth_date = take_date(
+        &mut issues,
+        input.birth_date.as_deref(),
+        "birth_date",
+        "出生年月",
+    );
     let gender = take_text(&mut issues, input.gender, 8, "gender", "性别最多 8 个字");
-    let ethnicity = take_text(&mut issues, input.ethnicity, 32, "ethnicity", "民族最多 32 个字");
-    let admin_title = take_text(&mut issues, input.admin_title, 64, "admin_title", "行政职务最多 64 个字");
-    let professional_title = take_text(&mut issues, input.professional_title, 64, "professional_title", "专业职务最多 64 个字");
-    let research_expertise = take_text(&mut issues, input.research_expertise, 120, "research_expertise", "研究专长最多 120 个字");
-    let education = take_text(&mut issues, input.education, 32, "education", "最后学历最多 32 个字");
-    let degree = take_text(&mut issues, input.degree, 32, "degree", "最后学位最多 32 个字");
-    let phone = take_text(&mut issues, input.mobile_phone, 20, "mobile_phone", "手机号码最多 20 位");
+    let ethnicity = take_text(
+        &mut issues,
+        input.ethnicity,
+        32,
+        "ethnicity",
+        "民族最多 32 个字",
+    );
+    let admin_title = take_text(
+        &mut issues,
+        input.admin_title,
+        64,
+        "admin_title",
+        "行政职务最多 64 个字",
+    );
+    let professional_title = take_text(
+        &mut issues,
+        input.professional_title,
+        64,
+        "professional_title",
+        "专业职务最多 64 个字",
+    );
+    let research_expertise = take_text(
+        &mut issues,
+        input.research_expertise,
+        120,
+        "research_expertise",
+        "研究专长最多 120 个字",
+    );
+    let education = take_text(
+        &mut issues,
+        input.education,
+        32,
+        "education",
+        "最后学历最多 32 个字",
+    );
+    let degree = take_text(
+        &mut issues,
+        input.degree,
+        32,
+        "degree",
+        "最后学位最多 32 个字",
+    );
+    let phone = take_text(
+        &mut issues,
+        input.mobile_phone,
+        20,
+        "mobile_phone",
+        "手机号码最多 20 位",
+    );
     if !issues.is_empty() {
         return Err(AppError::Validation(issues));
     }
@@ -535,8 +634,18 @@ async fn save_members(txn: &DatabaseTransaction, id: Uuid, body: Value) -> Resul
     for (index, row) in input.members.into_iter().enumerate() {
         let blank = row.name.trim().is_empty()
             && row.birth_date.as_deref().unwrap_or("").trim().is_empty()
-            && row.professional_title.as_deref().unwrap_or("").trim().is_empty()
-            && row.research_expertise.as_deref().unwrap_or("").trim().is_empty()
+            && row
+                .professional_title
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .is_empty()
+            && row
+                .research_expertise
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .is_empty()
             && row.education.as_deref().unwrap_or("").trim().is_empty()
             && row.degree.as_deref().unwrap_or("").trim().is_empty()
             && row.organization.as_deref().unwrap_or("").trim().is_empty();
@@ -545,20 +654,77 @@ async fn save_members(txn: &DatabaseTransaction, id: Uuid, body: Value) -> Resul
         }
         let label = member_label(index, &row.name);
         if row.name.trim().is_empty() {
-            push_issue(&mut issues, &format!("members.{index}.name"), &format!("{label}写了其他资料，但没有填写姓名"));
+            push_issue(
+                &mut issues,
+                &format!("members.{index}.name"),
+                &format!("{label}写了其他资料，但没有填写姓名"),
+            );
             continue;
         }
-        let name = take_required(&mut issues, &row.name, 64, &format!("members.{index}.name"), &format!("{label}的姓名最多 64 个字"));
-        let birth_date = take_date(&mut issues, row.birth_date.as_deref(), &format!("members.{index}.birth_date"), &format!("{label}的出生年月"));
-        let professional_title = take_text(&mut issues, row.professional_title, 64, &format!("members.{index}.professional_title"), &format!("{label}的专业职务最多 64 个字"));
-        let research_expertise = take_text(&mut issues, row.research_expertise, 120, &format!("members.{index}.research_expertise"), &format!("{label}的研究专长最多 120 个字"));
-        let education = take_text(&mut issues, row.education, 32, &format!("members.{index}.education"), &format!("{label}的学历最多 32 个字"));
-        let degree = take_text(&mut issues, row.degree, 32, &format!("members.{index}.degree"), &format!("{label}的学位最多 32 个字"));
-        let organization = take_text(&mut issues, row.organization, 120, &format!("members.{index}.organization"), &format!("{label}的工作单位最多 120 个字"));
-        ready.push((name, birth_date, professional_title, research_expertise, education, degree, organization));
+        let name = take_required(
+            &mut issues,
+            &row.name,
+            64,
+            &format!("members.{index}.name"),
+            &format!("{label}的姓名最多 64 个字"),
+        );
+        let birth_date = take_date(
+            &mut issues,
+            row.birth_date.as_deref(),
+            &format!("members.{index}.birth_date"),
+            &format!("{label}的出生年月"),
+        );
+        let professional_title = take_text(
+            &mut issues,
+            row.professional_title,
+            64,
+            &format!("members.{index}.professional_title"),
+            &format!("{label}的专业职务最多 64 个字"),
+        );
+        let research_expertise = take_text(
+            &mut issues,
+            row.research_expertise,
+            120,
+            &format!("members.{index}.research_expertise"),
+            &format!("{label}的研究专长最多 120 个字"),
+        );
+        let education = take_text(
+            &mut issues,
+            row.education,
+            32,
+            &format!("members.{index}.education"),
+            &format!("{label}的学历最多 32 个字"),
+        );
+        let degree = take_text(
+            &mut issues,
+            row.degree,
+            32,
+            &format!("members.{index}.degree"),
+            &format!("{label}的学位最多 32 个字"),
+        );
+        let organization = take_text(
+            &mut issues,
+            row.organization,
+            120,
+            &format!("members.{index}.organization"),
+            &format!("{label}的工作单位最多 120 个字"),
+        );
+        ready.push((
+            name,
+            birth_date,
+            professional_title,
+            research_expertise,
+            education,
+            degree,
+            organization,
+        ));
     }
     if ready.len() > 5 {
-        push_issue(&mut issues, "members", "主要参加者最多 5 人，不含项目负责人");
+        push_issue(
+            &mut issues,
+            "members",
+            "主要参加者最多 5 人，不含项目负责人",
+        );
     }
     if !issues.is_empty() {
         return Err(AppError::Validation(issues));
@@ -567,7 +733,11 @@ async fn save_members(txn: &DatabaseTransaction, id: Uuid, body: Value) -> Resul
         .filter(application_members::Column::ApplicationId.eq(id))
         .exec(txn)
         .await?;
-    for (index, (name, birth_date, professional_title, research_expertise, education, degree, organization)) in ready.into_iter().enumerate() {
+    for (
+        index,
+        (name, birth_date, professional_title, research_expertise, education, degree, organization),
+    ) in ready.into_iter().enumerate()
+    {
         let Some(name) = name else {
             continue;
         };
@@ -593,7 +763,11 @@ async fn save_members(txn: &DatabaseTransaction, id: Uuid, body: Value) -> Resul
     Ok(())
 }
 
-async fn save_recommender(txn: &DatabaseTransaction, id: Uuid, body: Value) -> Result<(), AppError> {
+async fn save_recommender(
+    txn: &DatabaseTransaction,
+    id: Uuid,
+    body: Value,
+) -> Result<(), AppError> {
     #[derive(Deserialize)]
     struct Input {
         name: Option<String>,
@@ -608,15 +782,28 @@ async fn save_recommender(txn: &DatabaseTransaction, id: Uuid, body: Value) -> R
     let Some(name) = clean(input.name) else {
         return Ok(());
     };
-    let title = clean(input.professional_title).ok_or_else(|| invalid("professional_title", "请填写推荐人专业技术职务"))?;
-    let expertise = clean(input.expertise).ok_or_else(|| invalid("expertise", "请填写推荐人研究专长"))?;
-    let organization = clean(input.organization).ok_or_else(|| invalid("organization", "请填写推荐人工作单位"))?;
+    let title = clean(input.professional_title)
+        .ok_or_else(|| invalid("professional_title", "请填写推荐人专业技术职务"))?;
+    let expertise =
+        clean(input.expertise).ok_or_else(|| invalid("expertise", "请填写推荐人研究专长"))?;
+    let organization =
+        clean(input.organization).ok_or_else(|| invalid("organization", "请填写推荐人工作单位"))?;
     recommenders::ActiveModel {
         application_id: Set(id),
         name: Set(require_len(&name, 64, "name", "推荐人姓名过长")?),
-        professional_title: Set(require_len(&title, 64, "professional_title", "专业技术职务过长")?),
+        professional_title: Set(require_len(
+            &title,
+            64,
+            "professional_title",
+            "专业技术职务过长",
+        )?),
         expertise: Set(require_len(&expertise, 120, "expertise", "研究专长过长")?),
-        organization: Set(require_len(&organization, 120, "organization", "工作单位过长")?),
+        organization: Set(require_len(
+            &organization,
+            120,
+            "organization",
+            "工作单位过长",
+        )?),
         opinion: Set(clean(input.opinion)),
         signed_on: Set(parse_date(input.signed_on.as_deref(), "signed_on")?),
         created_at: Set(now()),
@@ -627,7 +814,11 @@ async fn save_recommender(txn: &DatabaseTransaction, id: Uuid, body: Value) -> R
     Ok(())
 }
 
-async fn save_budget(txn: &DatabaseTransaction, app: &applications::Model, body: Value) -> Result<(), AppError> {
+async fn save_budget(
+    txn: &DatabaseTransaction,
+    app: &applications::Model,
+    body: Value,
+) -> Result<(), AppError> {
     #[derive(Deserialize)]
     struct Input {
         lines: Vec<BudgetBody>,
@@ -678,7 +869,11 @@ async fn save_budget(txn: &DatabaseTransaction, app: &applications::Model, body:
     Ok(())
 }
 
-async fn save_achievements(txn: &DatabaseTransaction, id: Uuid, body: Value) -> Result<(), AppError> {
+async fn save_achievements(
+    txn: &DatabaseTransaction,
+    id: Uuid,
+    body: Value,
+) -> Result<(), AppError> {
     #[derive(Deserialize)]
     struct Input {
         rows: Vec<AchievementBody>,
@@ -692,7 +887,11 @@ async fn save_achievements(txn: &DatabaseTransaction, id: Uuid, body: Value) -> 
         published_on: Option<String>,
     }
     let input: Input = decode(body)?;
-    let rows: Vec<_> = input.rows.into_iter().filter(|row| !row.title.trim().is_empty()).collect();
+    let rows: Vec<_> = input
+        .rows
+        .into_iter()
+        .filter(|row| !row.title.trim().is_empty())
+        .collect();
     ss_prior_achievements::Entity::delete_many()
         .filter(ss_prior_achievements::Column::ApplicationId.eq(id))
         .exec(txn)
@@ -703,10 +902,25 @@ async fn save_achievements(txn: &DatabaseTransaction, id: Uuid, body: Value) -> 
             application_id: Set(id),
             sort_order: Set(sort_of(index)?),
             title: Set(require_len(&row.title, 200, "title", "成果名称过长")?),
-            researchers: Set(limited(row.researchers.clone(), 120, "researchers", "研究者过长")?),
-            outcome_form: Set(limited(row.outcome_form.clone(), 64, "outcome_form", "成果形式过长")?),
+            researchers: Set(limited(
+                row.researchers.clone(),
+                120,
+                "researchers",
+                "研究者过长",
+            )?),
+            outcome_form: Set(limited(
+                row.outcome_form.clone(),
+                64,
+                "outcome_form",
+                "成果形式过长",
+            )?),
             publication: Set(clean(row.publication.clone())),
-            published_on: Set(limited(row.published_on.clone(), 32, "published_on", "发表时间过长")?),
+            published_on: Set(limited(
+                row.published_on.clone(),
+                32,
+                "published_on",
+                "发表时间过长",
+            )?),
             created_at: Set(now()),
             updated_at: Set(now()),
         }
@@ -760,8 +974,16 @@ async fn save_outputs(txn: &DatabaseTransaction, id: Uuid, body: Value) -> Resul
         finals: Vec<OutputBody>,
     }
     let input: Input = decode(body)?;
-    let stage: Vec<_> = input.stage.into_iter().filter(|row| !row.title.trim().is_empty()).collect();
-    let finals: Vec<_> = input.finals.into_iter().filter(|row| !row.title.trim().is_empty()).collect();
+    let stage: Vec<_> = input
+        .stage
+        .into_iter()
+        .filter(|row| !row.title.trim().is_empty())
+        .collect();
+    let finals: Vec<_> = input
+        .finals
+        .into_iter()
+        .filter(|row| !row.title.trim().is_empty())
+        .collect();
     if stage.len() > 10 {
         return Err(invalid("stage", "阶段性成果最多 10 项"));
     }
@@ -789,10 +1011,25 @@ async fn write_outputs(
             application_id: Set(id),
             kind: Set(kind.clone()),
             sort_order: Set(sort_of(index)?),
-            complete_on: Set(limited(row.complete_on.clone(), 32, "complete_on", "完成时间过长")?),
+            complete_on: Set(limited(
+                row.complete_on.clone(),
+                32,
+                "complete_on",
+                "完成时间过长",
+            )?),
             title: Set(require_len(&row.title, 200, "title", "成果名称过长")?),
-            outcome_form: Set(limited(row.outcome_form.clone(), 64, "outcome_form", "成果形式过长")?),
-            owner_name: Set(limited(row.owner_name.clone(), 64, "owner_name", "负责人姓名过长")?),
+            outcome_form: Set(limited(
+                row.outcome_form.clone(),
+                64,
+                "outcome_form",
+                "成果形式过长",
+            )?),
+            owner_name: Set(limited(
+                row.owner_name.clone(),
+                64,
+                "owner_name",
+                "负责人姓名过长",
+            )?),
             created_at: Set(now()),
             updated_at: Set(now()),
         }
@@ -834,7 +1071,9 @@ async fn save_content(txn: &DatabaseTransaction, id: Uuid, body: Value) -> Resul
         content: Option<String>,
     }
     let input: Input = decode(body)?;
-    ns_research_contents::Entity::delete_by_id(id).exec(txn).await?;
+    ns_research_contents::Entity::delete_by_id(id)
+        .exec(txn)
+        .await?;
     ns_research_contents::ActiveModel {
         application_id: Set(id),
         content: Set(clean(input.content)),
@@ -1038,8 +1277,22 @@ async fn save_indicators(txn: &DatabaseTransaction, id: Uuid, body: Value) -> Re
         standard_enterprise_participate: Set(input.standard_enterprise_participate),
         pilot_line: Set(input.pilot_line),
         production_line: Set(input.production_line),
-        new_sales_income: Set(money(if input.new_sales_income.is_empty() { "0" } else { &input.new_sales_income }, "new_sales_income")?),
-        new_profit_tax: Set(money(if input.new_profit_tax.is_empty() { "0" } else { &input.new_profit_tax }, "new_profit_tax")?),
+        new_sales_income: Set(money(
+            if input.new_sales_income.is_empty() {
+                "0"
+            } else {
+                &input.new_sales_income
+            },
+            "new_sales_income",
+        )?),
+        new_profit_tax: Set(money(
+            if input.new_profit_tax.is_empty() {
+                "0"
+            } else {
+                &input.new_profit_tax
+            },
+            "new_profit_tax",
+        )?),
         talent_train_senior: Set(input.talent_train_senior),
         talent_train_intermediate: Set(input.talent_train_intermediate),
         talent_introduce_senior: Set(input.talent_introduce_senior),
@@ -1122,7 +1375,11 @@ async fn save_equipments(txn: &DatabaseTransaction, id: Uuid, body: Value) -> Re
         purpose: Option<String>,
     }
     let input: Input = decode(body)?;
-    let rows: Vec<_> = input.rows.into_iter().filter(|row| !row.name_spec.trim().is_empty()).collect();
+    let rows: Vec<_> = input
+        .rows
+        .into_iter()
+        .filter(|row| !row.name_spec.trim().is_empty())
+        .collect();
     ns_equipments::Entity::delete_many()
         .filter(ns_equipments::Column::ApplicationId.eq(id))
         .exec(txn)
@@ -1131,7 +1388,11 @@ async fn save_equipments(txn: &DatabaseTransaction, id: Uuid, body: Value) -> Re
         if row.quantity <= 0 {
             return Err(invalid(
                 &format!("equipments.{index}.quantity"),
-                &format!("第 {} 台设备「{}」的数量必须大于 0", index + 1, row.name_spec.trim()),
+                &format!(
+                    "第 {} 台设备「{}」的数量必须大于 0",
+                    index + 1,
+                    row.name_spec.trim()
+                ),
             ));
         }
         let price = match read_money(&row.unit_price) {
@@ -1139,14 +1400,22 @@ async fn save_equipments(txn: &DatabaseTransaction, id: Uuid, body: Value) -> Re
             Err(reason) => {
                 return Err(invalid(
                     &format!("equipments.{index}.unit_price"),
-                    &format!("第 {} 台设备「{}」的单价{reason}", index + 1, row.name_spec.trim()),
+                    &format!(
+                        "第 {} 台设备「{}」的单价{reason}",
+                        index + 1,
+                        row.name_spec.trim()
+                    ),
                 ));
             }
         };
         if price < sea_orm::prelude::Decimal::from(5000) {
             return Err(invalid(
                 &format!("equipments.{index}.unit_price"),
-                &format!("第 {} 台设备「{}」的单价低于 5000 元，不列入清单", index + 1, row.name_spec.trim()),
+                &format!(
+                    "第 {} 台设备「{}」的单价低于 5000 元，不列入清单",
+                    index + 1,
+                    row.name_spec.trim()
+                ),
             ));
         }
         let amount = price * sea_orm::prelude::Decimal::from(row.quantity);
@@ -1154,11 +1423,21 @@ async fn save_equipments(txn: &DatabaseTransaction, id: Uuid, body: Value) -> Re
             id: Set(Uuid::new_v4()),
             application_id: Set(id),
             sort_order: Set(sort_of(index)?),
-            name_spec: Set(require_len(&row.name_spec, 200, "name_spec", "设备名称过长")?),
+            name_spec: Set(require_len(
+                &row.name_spec,
+                200,
+                "name_spec",
+                "设备名称过长",
+            )?),
             quantity: Set(Some(row.quantity)),
             unit_price: Set(Some(price)),
             amount: Set(Some(amount)),
-            funding_source: Set(limited(row.funding_source.clone(), 64, "funding_source", "资金来源过长")?),
+            funding_source: Set(limited(
+                row.funding_source.clone(),
+                64,
+                "funding_source",
+                "资金来源过长",
+            )?),
             purpose: Set(clean(row.purpose.clone())),
             created_at: Set(now()),
             updated_at: Set(now()),
@@ -1169,12 +1448,21 @@ async fn save_equipments(txn: &DatabaseTransaction, id: Uuid, body: Value) -> Re
     Ok(())
 }
 
-async fn validate_for_submit(db: &DatabaseConnection, app: &applications::Model) -> Result<(), AppError> {
+async fn validate_for_submit(
+    db: &DatabaseConnection,
+    app: &applications::Model,
+) -> Result<(), AppError> {
     let title = app.title.as_deref().unwrap_or("").trim();
     if title.is_empty() || title.chars().count() > 40 {
         return Err(invalid("title", "请填写项目名称，且不超过 40 个字"));
     }
-    if app.principal_name.as_deref().unwrap_or("").trim().is_empty() {
+    if app
+        .principal_name
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+    {
         return Err(invalid("principal_name", "请填写项目负责人"));
     }
     if app.department_id.is_none() {
@@ -1194,7 +1482,10 @@ async fn validate_for_submit(db: &DatabaseConnection, app: &applications::Model)
         app.degree.as_deref().unwrap_or(""),
     ) && recommender.is_none()
     {
-        return Err(invalid("recommender", "负责人不具备中级及以上职称，且不具备研究生及以上学历时，必须填写推荐人"));
+        return Err(invalid(
+            "recommender",
+            "负责人不具备中级及以上职称，且不具备研究生及以上学历时，必须填写推荐人",
+        ));
     }
     if let Some(recommender) = &recommender {
         let same_as_principal = recommender.name == app.principal_name.as_deref().unwrap_or("");
@@ -1218,7 +1509,10 @@ async fn validate_for_submit(db: &DatabaseConnection, app: &applications::Model)
     Ok(())
 }
 
-fn budget_total(subjects: &[budget_subjects::Model], lines: &[application_budgets::Model]) -> sea_orm::prelude::Decimal {
+pub(crate) fn budget_total(
+    subjects: &[budget_subjects::Model],
+    lines: &[application_budgets::Model],
+) -> sea_orm::prelude::Decimal {
     let mut direct = sea_orm::prelude::Decimal::ZERO;
     let mut indirect = sea_orm::prelude::Decimal::ZERO;
     for line in lines {
@@ -1235,7 +1529,10 @@ fn budget_total(subjects: &[budget_subjects::Model], lines: &[application_budget
     direct + indirect
 }
 
-async fn load_view(db: &DatabaseConnection, id: Uuid) -> Result<ApplicationView, AppError> {
+pub(crate) async fn load_view(
+    db: &DatabaseConnection,
+    id: Uuid,
+) -> Result<ApplicationView, AppError> {
     let app = applications::Entity::find_by_id(id)
         .one(db)
         .await?
@@ -1298,7 +1595,9 @@ async fn load_view(db: &DatabaseConnection, id: Uuid) -> Result<ApplicationView,
         status: status_code(&app.status).to_owned(),
         editable: matches!(
             app.status,
-            ApplicationStatus::Draft | ApplicationStatus::DeptReturned | ApplicationStatus::OfficeReturned
+            ApplicationStatus::Draft
+                | ApplicationStatus::DeptReturned
+                | ApplicationStatus::OfficeReturned
         ),
         principal_name: app.principal_name,
         gender: app.gender,
@@ -1311,7 +1610,9 @@ async fn load_view(db: &DatabaseConnection, id: Uuid) -> Result<ApplicationView,
         degree: app.degree,
         mobile_phone: app.mobile_phone,
         department_name,
-        filled_on: app.filled_on.map(|date| date.format("%Y-%m-%d").to_string()),
+        filled_on: app
+            .filled_on
+            .map(|date| date.format("%Y-%m-%d").to_string()),
         commitment_accepted: app.commitment_accepted,
         members: members
             .into_iter()
@@ -1331,7 +1632,9 @@ async fn load_view(db: &DatabaseConnection, id: Uuid) -> Result<ApplicationView,
             expertise: row.expertise,
             organization: row.organization,
             opinion: row.opinion,
-            signed_on: row.signed_on.map(|date| date.format("%Y-%m-%d").to_string()),
+            signed_on: row
+                .signed_on
+                .map(|date| date.format("%Y-%m-%d").to_string()),
         }),
         budget: BudgetView {
             lines: subjects
@@ -1393,11 +1696,15 @@ async fn load_view(db: &DatabaseConnection, id: Uuid) -> Result<ApplicationView,
             .collect(),
         ns_profile: profile.and_then(|row| row.summary),
         ns_content: content.and_then(|row| row.content),
-        ns_indicators: indicators.map(indicator_view).unwrap_or_else(empty_indicators),
+        ns_indicators: indicators
+            .map(indicator_view)
+            .unwrap_or_else(empty_indicators),
         ns_schedules: schedules
             .into_iter()
             .map(|row| ScheduleView {
-                start_date: row.start_date.map(|date| date.format("%Y-%m-%d").to_string()),
+                start_date: row
+                    .start_date
+                    .map(|date| date.format("%Y-%m-%d").to_string()),
                 end_date: row.end_date.map(|date| date.format("%Y-%m-%d").to_string()),
                 goal: row.goal,
             })
@@ -1407,12 +1714,20 @@ async fn load_view(db: &DatabaseConnection, id: Uuid) -> Result<ApplicationView,
             .map(|row| EquipmentView {
                 name_spec: row.name_spec,
                 quantity: row.quantity.unwrap_or(0),
-                unit_price: row.unit_price.map(money_text).unwrap_or_else(|| "0.00".to_owned()),
-                amount: row.amount.map(money_text).unwrap_or_else(|| "0.00".to_owned()),
+                unit_price: row
+                    .unit_price
+                    .map(money_text)
+                    .unwrap_or_else(|| "0.00".to_owned()),
+                amount: row
+                    .amount
+                    .map(money_text)
+                    .unwrap_or_else(|| "0.00".to_owned()),
                 funding_source: row.funding_source,
                 purpose: row.purpose,
             })
             .collect(),
+        conclusion_opinion: app.conclusion_opinion,
+        attachments: crate::services::attachments::list_views(db, id, true).await?,
     })
 }
 
@@ -1425,7 +1740,7 @@ fn output_view(row: &ss_expected_outputs::Model) -> OutputView {
     }
 }
 
-fn indicator_view(row: ns_indicators::Model) -> IndicatorView {
+pub(crate) fn indicator_view(row: ns_indicators::Model) -> IndicatorView {
     IndicatorView {
         paper_international: row.paper_international,
         paper_domestic: row.paper_domestic,
@@ -1479,7 +1794,7 @@ fn indicator_view(row: ns_indicators::Model) -> IndicatorView {
     }
 }
 
-fn empty_indicators() -> IndicatorView {
+pub(crate) fn empty_indicators() -> IndicatorView {
     IndicatorView {
         paper_international: 0,
         paper_domestic: 0,
@@ -1539,13 +1854,17 @@ fn budget_sum(
     group: &str,
     only_fillable: bool,
 ) -> sea_orm::prelude::Decimal {
-    lines.iter().fold(sea_orm::prelude::Decimal::ZERO, |sum, line| {
-        let Some(subject) = subjects.iter().find(|item| item.code == line.subject_code) else {
-            return sum;
-        };
-        let matched = subject.group_name == group && (!only_fillable || subject.fillable) && (only_fillable || subject.parent_code.is_none());
-        if matched { sum + line.amount } else { sum }
-    })
+    lines
+        .iter()
+        .fold(sea_orm::prelude::Decimal::ZERO, |sum, line| {
+            let Some(subject) = subjects.iter().find(|item| item.code == line.subject_code) else {
+                return sum;
+            };
+            let matched = subject.group_name == group
+                && (!only_fillable || subject.fillable)
+                && (only_fillable || subject.parent_code.is_none());
+            if matched { sum + line.amount } else { sum }
+        })
 }
 
 async fn touch(txn: &DatabaseTransaction, id: Uuid) -> Result<(), AppError> {
@@ -1557,7 +1876,11 @@ async fn touch(txn: &DatabaseTransaction, id: Uuid) -> Result<(), AppError> {
     Ok(())
 }
 
-async fn load_owned(db: &DatabaseConnection, user: &CurrentUser, id: Uuid) -> Result<applications::Model, AppError> {
+async fn load_owned(
+    db: &DatabaseConnection,
+    user: &CurrentUser,
+    id: Uuid,
+) -> Result<applications::Model, AppError> {
     let app = applications::Entity::find_by_id(id)
         .one(db)
         .await?
@@ -1571,7 +1894,9 @@ async fn load_owned(db: &DatabaseConnection, user: &CurrentUser, id: Uuid) -> Re
 fn ensure_editable(app: &applications::Model) -> Result<(), AppError> {
     if matches!(
         app.status,
-        ApplicationStatus::Draft | ApplicationStatus::DeptReturned | ApplicationStatus::OfficeReturned
+        ApplicationStatus::Draft
+            | ApplicationStatus::DeptReturned
+            | ApplicationStatus::OfficeReturned
     ) {
         Ok(())
     } else {
@@ -1580,7 +1905,10 @@ fn ensure_editable(app: &applications::Model) -> Result<(), AppError> {
 }
 
 fn ensure_section_class(app: &applications::Model, section: &str) -> Result<(), AppError> {
-    let social = matches!(section, "ss-achievements" | "ss-design" | "ss-foundation" | "ss-outputs");
+    let social = matches!(
+        section,
+        "ss-achievements" | "ss-design" | "ss-foundation" | "ss-outputs"
+    );
     let natural = matches!(
         section,
         "ns-profile" | "ns-content" | "ns-indicators" | "ns-schedules" | "ns-equipments"
@@ -1592,21 +1920,6 @@ fn ensure_section_class(app: &applications::Model, section: &str) -> Result<(), 
         return Err(invalid("section", "这个栏目只用于自然科学类申报书"));
     }
     Ok(())
-}
-
-async fn open_cycle(db: &DatabaseConnection) -> Result<application_cycles::Model, AppError> {
-    let timestamp = now();
-    let cycles = application_cycles::Entity::find()
-        .filter(application_cycles::Column::Status.eq(CycleStatus::Open))
-        .order_by_desc(application_cycles::Column::CycleYear)
-        .all(db)
-        .await?;
-    cycles
-        .into_iter()
-        .find(|cycle| {
-            cycle.opens_at.is_none_or(|opens| opens <= timestamp) && cycle.closes_at.is_none_or(|closes| timestamp <= closes)
-        })
-        .ok_or_else(|| AppError::Conflict("当前没有开放中的申报批次".to_owned()))
 }
 
 fn parse_class(raw: &str) -> Result<ProjectClass, AppError> {
@@ -1626,14 +1939,14 @@ fn parse_family(raw: &str) -> Result<BudgetFamily, AppError> {
     }
 }
 
-fn family_of(class: &ProjectClass) -> BudgetFamily {
+pub(crate) fn family_of(class: &ProjectClass) -> BudgetFamily {
     match class {
         ProjectClass::Social => BudgetFamily::Social,
         ProjectClass::Natural | ProjectClass::DualHigh => BudgetFamily::Natural,
     }
 }
 
-fn class_code(class: &ProjectClass) -> &'static str {
+pub(crate) fn class_code(class: &ProjectClass) -> &'static str {
     match class {
         ProjectClass::Social => "social",
         ProjectClass::Natural => "natural",
@@ -1641,7 +1954,7 @@ fn class_code(class: &ProjectClass) -> &'static str {
     }
 }
 
-fn status_code(status: &ApplicationStatus) -> &'static str {
+pub(crate) fn status_code(status: &ApplicationStatus) -> &'static str {
     match status {
         ApplicationStatus::Draft => "draft",
         ApplicationStatus::Submitted => "submitted",
@@ -1658,7 +1971,10 @@ fn status_code(status: &ApplicationStatus) -> &'static str {
 }
 
 fn keyword_count(raw: &str) -> usize {
-    raw.split([';', '；']).map(str::trim).filter(|item| !item.is_empty()).count()
+    raw.split([';', '；'])
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .count()
 }
 
 fn needs_recommender(title: &str, education: &str, degree: &str) -> bool {
@@ -1670,28 +1986,47 @@ fn has_midlevel_title(title: &str) -> bool {
     if title.is_empty() || title.contains("助教") || title.starts_with("助理") {
         return false;
     }
-    ["讲师", "副教授", "教授", "研究员", "高级工程师", "高级实验师"]
-        .iter()
-        .any(|item| title.contains(item))
+    [
+        "讲师",
+        "副教授",
+        "教授",
+        "研究员",
+        "高级工程师",
+        "高级实验师",
+    ]
+    .iter()
+    .any(|item| title.contains(item))
 }
 
 fn has_graduate(education: &str, degree: &str) -> bool {
     let text = format!("{education}{degree}");
-    ["研究生", "硕士", "博士"].iter().any(|item| text.contains(item))
+    ["研究生", "硕士", "博士"]
+        .iter()
+        .any(|item| text.contains(item))
 }
 
 fn decode<T: for<'de> Deserialize<'de>>(body: Value) -> Result<T, AppError> {
-    serde_json::from_value(body).map_err(|_| AppError::BadRequest("申报栏目数据格式不正确".to_owned()))
+    serde_json::from_value(body)
+        .map_err(|_| AppError::BadRequest("申报栏目数据格式不正确".to_owned()))
 }
 
 fn clean(value: Option<String>) -> Option<String> {
     value.and_then(|item| {
         let trimmed = item.trim();
-        if trimmed.is_empty() { None } else { Some(trimmed.to_owned()) }
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_owned())
+        }
     })
 }
 
-fn limited(value: Option<String>, max: usize, field: &str, message: &str) -> Result<Option<String>, AppError> {
+fn limited(
+    value: Option<String>,
+    max: usize,
+    field: &str,
+    message: &str,
+) -> Result<Option<String>, AppError> {
     let Some(value) = clean(value) else {
         return Ok(None);
     };
@@ -1718,11 +2053,26 @@ fn parse_date(raw: Option<&str>, field: &str) -> Result<Option<NaiveDate>, AppEr
     loose_date(raw).map_err(|message| invalid(field, message))
 }
 
-fn take_row_date(raw: Option<&str>, index: usize, key: &str, label: &str) -> Result<Option<NaiveDate>, AppError> {
-    loose_date(raw).map_err(|reason| invalid(&format!("schedules.{index}.{key}"), &format!("第 {} 条进度的{label}{reason}", index + 1)))
+fn take_row_date(
+    raw: Option<&str>,
+    index: usize,
+    key: &str,
+    label: &str,
+) -> Result<Option<NaiveDate>, AppError> {
+    loose_date(raw).map_err(|reason| {
+        invalid(
+            &format!("schedules.{index}.{key}"),
+            &format!("第 {} 条进度的{label}{reason}", index + 1),
+        )
+    })
 }
 
-fn take_date(issues: &mut Vec<FieldError>, raw: Option<&str>, field: &str, label: &str) -> Option<NaiveDate> {
+fn take_date(
+    issues: &mut Vec<FieldError>,
+    raw: Option<&str>,
+    field: &str,
+    label: &str,
+) -> Option<NaiveDate> {
     match loose_date(raw) {
         Ok(date) => date,
         Err(reason) => {
@@ -1732,7 +2082,13 @@ fn take_date(issues: &mut Vec<FieldError>, raw: Option<&str>, field: &str, label
     }
 }
 
-fn take_text(issues: &mut Vec<FieldError>, value: Option<String>, max: usize, field: &str, message: &str) -> Option<String> {
+fn take_text(
+    issues: &mut Vec<FieldError>,
+    value: Option<String>,
+    max: usize,
+    field: &str,
+    message: &str,
+) -> Option<String> {
     let value = clean(value)?;
     if value.chars().count() > max {
         push_issue(issues, field, message);
@@ -1741,7 +2097,13 @@ fn take_text(issues: &mut Vec<FieldError>, value: Option<String>, max: usize, fi
     Some(value)
 }
 
-fn take_required(issues: &mut Vec<FieldError>, value: &str, max: usize, field: &str, message: &str) -> Option<String> {
+fn take_required(
+    issues: &mut Vec<FieldError>,
+    value: &str,
+    max: usize,
+    field: &str,
+    message: &str,
+) -> Option<String> {
     let value = value.trim();
     if value.is_empty() {
         push_issue(issues, field, message);
@@ -1797,7 +2159,10 @@ fn loose_date(raw: Option<&str>) -> Result<Option<NaiveDate>, &'static str> {
 }
 
 fn read_money(raw: &str) -> Result<sea_orm::prelude::Decimal, &'static str> {
-    let parsed = raw.trim().parse::<sea_orm::prelude::Decimal>().map_err(|_| "格式不正确，请填写数字，最多两位小数")?;
+    let parsed = raw
+        .trim()
+        .parse::<sea_orm::prelude::Decimal>()
+        .map_err(|_| "格式不正确，请填写数字，最多两位小数")?;
     if parsed < sea_orm::prelude::Decimal::ZERO {
         return Err("不能为负数");
     }
@@ -1811,7 +2176,7 @@ fn money(raw: &str, field: &str) -> Result<sea_orm::prelude::Decimal, AppError> 
     read_money(raw).map_err(|message| invalid(field, message))
 }
 
-fn money_text(value: sea_orm::prelude::Decimal) -> String {
+pub(crate) fn money_text(value: sea_orm::prelude::Decimal) -> String {
     format!("{value:.2}")
 }
 

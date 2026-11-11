@@ -61,6 +61,7 @@ import officeBuildingCogOutline from "@iconify-icons/mdi/office-building-cog-out
 import playlistCheck from "@iconify-icons/mdi/playlist-check";
 import plus from "@iconify-icons/mdi/plus";
 import progressCheck from "@iconify-icons/mdi/progress-check";
+import refresh from "@iconify-icons/mdi/refresh";
 import sendOutline from "@iconify-icons/mdi/send-outline";
 import serverNetwork from "@iconify-icons/mdi/server-network";
 import shieldAccountOutline from "@iconify-icons/mdi/shield-account-outline";
@@ -135,6 +136,7 @@ const icons: Record<string, IconifyIcon> = {
   "mdi:playlist-check": playlistCheck,
   "mdi:plus": plus,
   "mdi:progress-check": progressCheck,
+  "mdi:refresh": refresh,
   "mdi:send-outline": sendOutline,
   "mdi:server-network": serverNetwork,
   "mdi:shield-account-outline": shieldAccountOutline,

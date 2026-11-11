@@ -1,209 +1,705 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import { ApplicationReading } from "@/components/application-reading";
+import { ReviewTimeline } from "@/components/review-timeline";
 import { Icon } from "@/components/icon";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { StickyTable } from "@/components/ui/sticky-table";
+import { Textarea } from "@/components/ui/textarea";
 import { SideNav, WorkspaceShell } from "@/components/workspace-shell";
+import { ApiError } from "@/lib/api";
+import { classLabels, statusLabels } from "@/lib/applications";
+import { fetchTimeline, type TimelineEvent } from "@/lib/timeline";
+import {
+  assignExperts,
+  concludeApplication,
+  fetchExperts,
+  fetchOfficeQueue,
+  fetchOfficeReview,
+  revokeExpert,
+  submitOfficeReview,
+  type ExpertOption,
+  type OfficeDetail,
+  type OfficeReviewItem,
+  type OfficeScope,
+} from "@/lib/office-reviews";
 
-type Status = "pending" | "blind" | "passed" | "returned";
+const sections: Array<{ id: OfficeScope; label: string; icon: string }> = [
+  { id: "pending", label: "待审核", icon: "mdi:inbox-arrow-down-outline" },
+  { id: "assign", label: "待指派", icon: "mdi:account-supervisor-outline" },
+  { id: "reviewing", label: "盲审中", icon: "mdi:gavel" },
+  { id: "conclude", label: "待立项", icon: "mdi:clipboard-check-outline" },
+  { id: "established", label: "已立项", icon: "mdi:check-decagram-outline" },
+  { id: "expert_rejected", label: "不予立项", icon: "mdi:file-alert-outline" },
+  { id: "returned", label: "已退回", icon: "mdi:file-undo-outline" },
+  { id: "rejected", label: "不通过", icon: "mdi:close" },
+];
 
-type Review = {
-  code: string;
-  title: string;
-  kind: "社会科学" | "自然科学";
-  dept: string;
-  score: string;
-  recovered: string;
-  budget: string;
-  status: Status;
+const emptyText: Record<OfficeScope, string> = {
+  pending: "还没有待科研处审核的申报。",
+  assign: "还没有等待指派专家的申报。",
+  reviewing: "没有正在盲审的申报。",
+  conclude: "没有专家已经全部提交、等待立项的申报。",
+  established: "还没有立项的申报。",
+  expert_rejected: "还没有不予立项的申报。",
+  returned: "还没有退回的申报。",
+  rejected: "还没有不通过的申报。",
 };
 
-const reviews: Review[] = [
-  { code: "SH2026-0175", title: "数字技术赋能乡村义务教育均衡发展研究", kind: "社会科学", dept: "经济管理学院", score: "86.4", recovered: "3/3", budget: "12.0", status: "pending" },
-  { code: "SH2026-0198", title: "教育数字化背景下地方高校教师教学能力发展研究", kind: "社会科学", dept: "经济管理学院", score: "87.2", recovered: "3/3", budget: "10.5", status: "pending" },
-  { code: "ZR2026-0044", title: "喀斯特山区特色农产品病虫害轻量化识别研究", kind: "自然科学", dept: "信息工程学院", score: "—", recovered: "1/3", budget: "18.6", status: "blind" },
-  { code: "SH2026-0166", title: "民族地区高职院校产教融合绩效评价研究", kind: "社会科学", dept: "教育科学学院", score: "90.1", recovered: "3/3", budget: "8.0", status: "passed" },
-  { code: "ZR2026-0038", title: "智能制造车间能耗监测方法研究", kind: "自然科学", dept: "机电工程学院", score: "71.5", recovered: "3/3", budget: "16.0", status: "returned" },
-];
-
-const publicity = [
-  ["01", "SH2026-0166", "民族地区高职院校产教融合绩效评价研究", "教育科学学院", "社会科学", "8.0"],
-  ["02", "SH2026-0175", "数字技术赋能乡村义务教育均衡发展研究", "经济管理学院", "社会科学", "12.0"],
-  ["03", "ZR2026-0041", "山地特色水果品质无损检测研究", "现代农业学院", "自然科学", "15.0"],
-  ["04", "SH2026-0182", "布依族节日文化传承与校园教育融合研究", "教育科学学院", "社会科学", "6.5"],
-  ["05", "ZR2026-0046", "护理技能虚拟仿真实训资源开发", "护理学院", "自然科学", "14.2"],
-  ["06", "SH2026-0190", "县域中小企业数字化转型路径研究", "经济管理学院", "社会科学", "9.8"],
-  ["07", "ZR2026-0050", "新能源汽车电池热管理实验研究", "机电工程学院", "自然科学", "19.0"],
-  ["08", "SH2026-0194", "乡村养老服务设施空间布局研究", "经济管理学院", "社会科学", "7.6"],
-];
-
 export function OfficeWorkspace() {
-  const [section, setSection] = useState("queue");
-  const [items, setItems] = useState(reviews);
+  const [section, setSection] = useState<OfficeScope>("pending");
+  const [queues, setQueues] = useState<
+    Partial<Record<OfficeScope, OfficeReviewItem[]>>
+  >({});
+  const [loading, setLoading] = useState(true);
+  const [version, setVersion] = useState(0);
+  const [loadError, setLoadError] = useState("");
+  const [notice, setNotice] = useState("");
   const [query, setQuery] = useState("");
+  const [kind, setKind] = useState("all");
+  const [active, setActive] = useState<OfficeReviewItem | null>(null);
+  const [detail, setDetail] = useState<OfficeDetail | null>(null);
+  const [detailError, setDetailError] = useState("");
+  const [timeline, setTimeline] = useState<TimelineEvent[] | null>(null);
+  const [timelineError, setTimelineError] = useState("");
+  const [code, setCode] = useState("");
+  const [opinion, setOpinion] = useState("");
+  const [formError, setFormError] = useState("");
+  const [experts, setExperts] = useState<ExpertOption[]>([]);
+  const [expertQuery, setExpertQuery] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
-  const [active, setActive] = useState<Review | null>(null);
-  const [opinion, setOpinion] = useState("形式审查通过，盲审均分达到立项建议线，同意进入公示。");
-  const [toast, setToast] = useState("");
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  const reviewNav = [
-    { id: "queue", label: "复核工作台", icon: "mdi:clipboard-check-outline" },
-    { id: "pending", label: "待复核", icon: "mdi:inbox-arrow-down-outline", badge: String(items.filter((item) => item.status === "pending").length) },
-    { id: "blind", label: "盲审待回收", icon: "mdi:gavel" },
-    { id: "passed", label: "已通过盲审", icon: "mdi:check-all" },
-    { id: "returned", label: "已退回", icon: "mdi:file-undo-outline" },
-    { id: "experts", label: "专家分组", icon: "mdi:account-supervisor-outline" },
-    { id: "stats", label: "复核统计", icon: "mdi:chart-box-outline" },
-  ];
-  const publicityNav = [
-    { id: "publicity", label: "公示公告", icon: "mdi:bullhorn-outline" },
-    { id: "list", label: "拟立项名单", icon: "mdi:format-list-numbered" },
-    { id: "objection", label: "异议处理", icon: "mdi:alert-circle-outline" },
-    { id: "archive", label: "归档", icon: "mdi:archive-search-outline" },
-  ];
-  const top = section === "publicity" || section === "list" || section === "objection" || section === "archive" ? "publicity" : "review";
-  const nav = top === "publicity" ? publicityNav : reviewNav;
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const entries = await Promise.all(
+          sections.map(
+            async (item) => [item.id, await fetchOfficeQueue(item.id)] as const,
+          ),
+        );
+        if (cancelled) return;
+        setQueues(Object.fromEntries(entries));
+        setLoadError("");
+      } catch (error) {
+        if (!cancelled)
+          setLoadError(
+            error instanceof ApiError ? error.message : "审核列表加载失败",
+          );
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [version]);
 
   const rows = useMemo(() => {
-    const scoped = section === "queue" || section === "stats" || section === "experts" ? items : items.filter((item) => item.status === section);
-    return scoped.filter((item) => `${item.title}${item.code}${item.dept}`.includes(query.trim()));
-  }, [items, query, section]);
+    const source = queues[section] ?? [];
+    const needle = query.trim();
+    return source.filter((item) => {
+      const classOk = kind === "all" || item.project_class === kind;
+      const text = `${item.title ?? ""}${item.principal_name ?? ""}${item.department_name}${item.code ?? ""}`;
+      return classOk && (needle === "" || text.includes(needle));
+    });
+  }, [kind, query, queues, section]);
 
-  function notify(message: string) {
-    setToast(message);
-    window.setTimeout(() => setToast(""), 2200);
+  function reload() {
+    setLoading(true);
+    setVersion((current) => current + 1);
   }
 
-  function decide(codes: string[], status: Status) {
-    if (codes.length === 0) {
-      notify("请先勾选项目");
+  function closeSheet() {
+    if (busy) return;
+    setActive(null);
+    setDetail(null);
+    setDetailError("");
+    setTimeline(null);
+    setTimelineError("");
+    setFormError("");
+    setPendingAction(null);
+    setPicked([]);
+  }
+
+  async function openItem(item: OfficeReviewItem) {
+    setActive(item);
+    setDetail(null);
+    setDetailError("");
+    setTimeline(null);
+    setTimelineError("");
+    setFormError("");
+    setCode("");
+    setOpinion("");
+    setPicked([]);
+    setExpertQuery("");
+    try {
+      const [next, people] = await Promise.all([
+        fetchOfficeReview(item.id),
+        fetchExperts(""),
+      ]);
+      setDetail(next);
+      setExperts(people);
+      try {
+        setTimeline(await fetchTimeline(item.id));
+      } catch (error) {
+        setTimelineError(
+          error instanceof ApiError ? error.message : "审核记录读取失败",
+        );
+      }
+    } catch (error) {
+      setDetailError(
+        error instanceof ApiError ? error.message : "申报书读取失败",
+      );
+    }
+  }
+
+  function ask(action: string) {
+    if (action === "approved" && code.trim() === "") {
+      setFormError("通过时必须填写封面编号");
       return;
     }
-    setItems((current) => current.map((item) => (codes.includes(item.code) ? { ...item, status } : item)));
-    setPicked([]);
-    setActive(null);
-    notify(status === "passed" ? "已通过复核" : "已退回");
+    if (
+      (action === "returned" ||
+        action === "rejected" ||
+        action === "established" ||
+        action === "expert_rejected") &&
+      opinion.trim() === ""
+    ) {
+      setFormError(
+        action === "established" || action === "expert_rejected"
+          ? "请填写结论说明"
+          : "退回或不通过必须填写意见",
+      );
+      return;
+    }
+    if (action === "assign" && picked.length === 0) {
+      setFormError("请选择至少一位专家");
+      return;
+    }
+    setFormError("");
+    setPendingAction(action);
   }
+
+  async function confirm() {
+    if (!active || !pendingAction) return;
+    setBusy(true);
+    setFormError("");
+    try {
+      if (
+        pendingAction === "approved" ||
+        pendingAction === "returned" ||
+        pendingAction === "rejected"
+      ) {
+        await submitOfficeReview(active.id, {
+          decision: pendingAction,
+          opinion: opinion.trim(),
+          code: code.trim(),
+        });
+        setNotice(
+          pendingAction === "approved"
+            ? "已通过，可以指派专家。"
+            : pendingAction === "returned"
+              ? "已退回给申报人。"
+              : "已标记为不通过。",
+        );
+        setSection(pendingAction === "approved" ? "assign" : pendingAction);
+      } else if (pendingAction === "assign") {
+        const next = await assignExperts(active.id, picked);
+        setDetail(next);
+        setPicked([]);
+        setNotice("已指派专家，申报进入盲审。");
+        setSection("reviewing");
+      } else if (
+        pendingAction === "established" ||
+        pendingAction === "expert_rejected"
+      ) {
+        await concludeApplication(active.id, {
+          decision: pendingAction,
+          opinion: opinion.trim(),
+        });
+        setNotice(
+          pendingAction === "established"
+            ? "已立项。结论说明申报人可见。"
+            : "已不予立项。结论说明申报人可见。",
+        );
+        setSection(pendingAction);
+        setActive(null);
+        setDetail(null);
+      }
+      if (pendingAction !== "assign") {
+        setActive(null);
+        setDetail(null);
+      }
+      setPendingAction(null);
+      reload();
+    } catch (error) {
+      setPendingAction(null);
+      setFormError(error instanceof ApiError ? error.message : "操作失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeAssignment(assignmentId: string) {
+    if (!active) return;
+    setBusy(true);
+    setFormError("");
+    try {
+      const next = await revokeExpert(active.id, assignmentId);
+      setDetail(next);
+      setNotice(
+        next.application.status === "office_approved"
+          ? "已撤销全部未评审指派，申报回到待指派。"
+          : "已撤销未评审的指派。",
+      );
+      reload();
+    } catch (error) {
+      setFormError(error instanceof ApiError ? error.message : "撤销失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const status = detail?.application.status;
+  const canReview = status === "dept_approved";
+  const canAssign =
+    status === "office_approved" || status === "expert_reviewing";
+  const visibleExperts = experts.filter((person) => {
+    const needle = expertQuery.trim();
+    return (
+      needle === "" ||
+      `${person.real_name}${person.research_expertise ?? ""}`.includes(needle)
+    );
+  });
 
   return (
     <WorkspaceShell
       role="office"
-      section={top}
-      onSection={(id) => setSection(id === "publicity" ? "publicity" : "queue")}
-      subtitle="科研处 · 复核与立项公示"
-      sidebar={<SideNav title={top === "publicity" ? "立项公示" : "科研处复核"} items={nav} active={section} onSelect={setSection} />}
+      section="review"
+      onSection={() => setSection("pending")}
+      subtitle="科研处复核"
+      sidebar={
+        <SideNav
+          title="科研处复核"
+          items={sections.map((item) => ({
+            ...item,
+            badge:
+              item.id === "pending" || item.id === "conclude"
+                ? String((queues[item.id] ?? []).length)
+                : undefined,
+          }))}
+          active={section}
+          onSelect={(id) => {
+            if (sections.some((item) => item.id === id)) {
+              setSection(id as OfficeScope);
+              setNotice("");
+            }
+          }}
+        />
+      }
     >
-      {top === "review" && section !== "experts" && section !== "stats" ? (
-        <section className="rounded-xl border border-ink-200/80 bg-white shadow-sm">
-          <div className="flex flex-wrap items-center gap-2 border-b border-ink-100 px-4 py-3">
-            <h1 className="text-[15px] font-semibold text-ink-900">科研处复核</h1>
-            <label className="ml-auto flex h-8 items-center gap-1 rounded-lg border border-ink-200 px-2 text-ink-400">
-              <Icon name="mdi:magnify" />
-              <input className="w-40 bg-transparent text-[12px] text-ink-800 outline-none" placeholder="项目、编号、系部" value={query} onChange={(event) => setQuery(event.target.value)} />
-            </label>
-            <span className="text-[11px] text-ink-400">已选 {picked.length}</span>
-            <button type="button" onClick={() => decide(picked, "passed")} className="inline-flex h-7 items-center gap-1 rounded-md border border-teal-200 bg-teal-50 px-2.5 text-[10.5px] text-teal-700"><Icon name="mdi:check-all" />批量通过</button>
-            <button type="button" onClick={() => decide(picked, "returned")} className="inline-flex h-7 items-center gap-1 rounded-md border border-gold-200 bg-gold-50 px-2.5 text-[10.5px] text-gold-700"><Icon name="mdi:undo-variant" />批量退回</button>
-            <button type="button" onClick={() => notify("已打开批量分配终审分组")} className="inline-flex h-7 items-center gap-1 rounded-md border border-ink-200 px-2.5 text-[10.5px] text-ink-600"><Icon name="mdi:account-multiple-check-outline" />分配终审组</button>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[960px] text-left text-[12px]">
-              <thead>
-                <tr className="bg-ink-50/70 text-[10.5px] text-ink-500">
-                  <th className="w-10 px-4 py-2.5" />
-                  {["项目名称 / 编号", "类别", "系部", "盲审均分", "回收", "申请经费", "状态", "操作"].map((head) => <th key={head} className="px-3 py-2.5">{head}</th>)}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-ink-100">
-                {rows.map((item) => (
-                  <tr key={item.code}>
-                    <td className="px-4 py-3"><input type="checkbox" aria-label={`选择 ${item.code}`} checked={picked.includes(item.code)} onChange={() => setPicked((current) => current.includes(item.code) ? current.filter((id) => id !== item.code) : [...current, item.code])} /></td>
-                    <td className="px-3 py-3"><p className="font-medium text-ink-800">{item.title}</p><p className="mt-0.5 text-[10px] text-ink-400">{item.code} · 材料 3 份</p></td>
-                    <td className="px-3 py-3"><span className={`rounded border px-1.5 py-0.5 text-[10px] ${item.kind === "社会科学" ? "border-gold-200 bg-gold-50 text-gold-700" : "border-teal-200 bg-teal-50 text-teal-700"}`}>{item.kind}</span></td>
-                    <td className="px-3 py-3">{item.dept}</td>
-                    <td className="px-3 py-3 font-semibold text-teal-800">{item.score}</td>
-                    <td className="px-3 py-3">{item.recovered}</td>
-                    <td className="px-3 py-3">{item.budget} 万元</td>
-                    <td className="px-3 py-3">{labelOf(item.status)}</td>
-                    <td className="px-3 py-3 text-right"><button type="button" onClick={() => setActive(item)} className="rounded-md bg-teal-700 px-2.5 py-1 text-[10.5px] text-white">复核</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      ) : null}
-
-      {section === "experts" ? (
-        <section className="rounded-xl border border-ink-200/80 bg-white p-4 text-[12.5px] leading-6 text-ink-600">
-          <h1 className="text-[16px] font-semibold text-ink-900">专家分组</h1>
-          <p className="mt-2">终审组 A：E-016、E-021、E-028，负责社会科学。终审组 B：E-033 回避本批次。专家身份只在科研处页面显示。</p>
-        </section>
-      ) : null}
-      {section === "stats" ? (
-        <section className="rounded-xl border border-ink-200/80 bg-white p-4 text-[13px] text-ink-600">待复核 {items.filter((item) => item.status === "pending").length} 项，盲审未收齐 {items.filter((item) => item.status === "blind").length} 项，已通过 {items.filter((item) => item.status === "passed").length} 项。</section>
-      ) : null}
-
-      {top === "publicity" ? (
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <section className="rounded-2xl bg-ink-900 p-6 text-white">
-            <p className="text-[12px] tracking-wide text-teal-200">黔西南民族职业技术学院 · 科研处</p>
-            <h1 className="mt-2 text-[22px] font-semibold">关于 2026 年度第一批拟立项名单的公示</h1>
-            <p className="mt-2 text-[12.5px] text-ink-200">公示期 2026-11-05 至 2026-11-18 · 拟立项 40 项 · 异议请在公示期内书面提交科研处</p>
-            <button type="button" onClick={() => notify("已生成公示名单导出（演示）")} className="mt-4 inline-flex items-center gap-1 rounded-lg bg-white/10 px-3 py-1.5 text-[12px]"><Icon name="mdi:download-outline" />导出名单</button>
-          </section>
-          {section !== "objection" && section !== "archive" ? (
-            <section className="mt-4 overflow-hidden rounded-xl border border-ink-200/80 bg-white">
-              <table className="w-full min-w-[760px] text-left text-[12px]">
-                <thead>
-                  <tr className="bg-ink-50/70 text-[10.5px] text-ink-500">
-                    {["序号", "编号", "项目名称", "系部", "类别", "经费（万元）"].map((head) => <th key={head} className="px-3 py-2.5">{head}</th>)}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-ink-100">
-                  {publicity.map((row) => (
-                    <tr key={row[1]}>
-                      {row.map((cell) => <td key={cell} className="px-3 py-2.5">{cell}</td>)}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <p className="px-4 py-3 text-[11px] text-ink-400">名单节选 8 项，公示全文共 40 项。</p>
-            </section>
-          ) : null}
-          {section === "objection" ? <p className="mt-4 rounded-xl border border-ink-200 bg-white p-4 text-[13px] text-ink-600">公示期内暂无异议。</p> : null}
-          {section === "archive" ? <p className="mt-4 rounded-xl border border-ink-200 bg-white p-4 text-[13px] text-ink-600">2025 年度第二批公示已归档，共 36 项。</p> : null}
+          <h1 className="text-[20px] font-semibold text-ink-900">
+            {sections.find((item) => item.id === section)?.label}
+          </h1>
+          <p className="mt-1 text-[12.5px] text-ink-500">
+            科研处审核全院申报，通过后填写封面编号并指派专家。
+          </p>
         </div>
+        <Button variant="outline" onClick={reload} disabled={loading}>
+          <Icon name="mdi:refresh" className="text-base" />
+          刷新
+        </Button>
+      </div>
+      {notice ? (
+        <p className="mt-4 rounded-lg bg-teal-50 px-3 py-2 text-[12.5px] text-teal-800">
+          {notice}
+        </p>
       ) : null}
+      {loadError ? (
+        <p className="mt-4 rounded-lg bg-[#fdf6f6] px-3 py-2 text-[12.5px] text-cinnabar">
+          {loadError}
+        </p>
+      ) : null}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <div className="relative min-w-55 flex-1">
+          <Icon
+            name="mdi:magnify"
+            className="pointer-events-none absolute top-1.5 left-2.5 text-base text-ink-400"
+          />
+          <Input
+            className="pl-8"
+            value={query}
+            placeholder="搜索项目、负责人、部门或编号"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </div>
+        <Select value={kind} onValueChange={setKind}>
+          <SelectTrigger aria-label="类别筛选" className="w-35">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部类别</SelectItem>
+            <SelectItem value="social">社会科学</SelectItem>
+            <SelectItem value="natural">自然科学</SelectItem>
+            <SelectItem value="dual_high">双高专项</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="mt-4 overflow-hidden rounded-xl border border-ink-200 bg-white">
+        <StickyTable
+          rows={loading ? [] : rows}
+          rowKey={(item) => item.id}
+          empty={
+            loading
+              ? "正在读取审核列表…"
+              : query.trim() || kind !== "all"
+                ? "没有符合筛选条件的申报。"
+                : emptyText[section]
+          }
+          columns={[
+            {
+              header: "项目名称",
+              width: 220,
+              cell: (item) => (
+                <span className="font-medium text-ink-900">
+                  {item.title || "未填写项目名称"}
+                </span>
+              ),
+            },
+            {
+              header: "类别",
+              width: 110,
+              cell: (item) =>
+                classLabels[item.project_class] ?? item.project_class,
+            },
+            {
+              header: "负责人",
+              width: 120,
+              cell: (item) => item.principal_name || "—",
+            },
+            {
+              header: "部门",
+              width: 140,
+              cell: (item) => item.department_name,
+            },
+            { header: "编号", width: 120, cell: (item) => item.code || "—" },
+            {
+              header: "盲审",
+              width: 140,
+              cell: (item) =>
+                item.assigned_count === 0
+                  ? "—"
+                  : `${item.reviewed_count}/${item.assigned_count}${item.average_score ? ` · ${item.average_score}` : ""}`,
+            },
+            {
+              header: "操作",
+              width: 88,
+              align: "right",
+              cell: (item) => (
+                <Button
+                  variant="subtle"
+                  size="sm"
+                  onClick={() => void openItem(item)}
+                >
+                  {canAct(item.status) ? "处理" : "查看"}
+                </Button>
+              ),
+            },
+          ]}
+        />
+      </div>
 
-      {active ? (
-        <div className="fixed inset-0 z-50 flex justify-end bg-ink-950/30">
-          <form className="h-full w-full max-w-md bg-white p-5" onSubmit={(event) => { event.preventDefault(); decide([active.code], "passed"); }}>
-            <div className="flex items-start justify-between">
-              <h2 className="text-[16px] font-semibold">{active.title}</h2>
-              <button type="button" onClick={() => setActive(null)} aria-label="关闭"><Icon name="mdi:close" /></button>
-            </div>
-            <p className="mt-2 text-[12px] text-ink-500">{active.code} · {active.dept} · 盲审均分 {active.score} · 回收 {active.recovered}</p>
-            <p className="mt-3 rounded-lg bg-ink-50 p-3 text-[12px] leading-5 text-ink-600">专家身份仅科研处可见：E-016、E-021、E-028。申请人页面只显示回收进度。</p>
-            <label className="mt-4 block">
-              <span className="field-label">复核意见</span>
-              <textarea className="field-textarea" value={opinion} onChange={(event) => setOpinion(event.target.value)} />
-            </label>
-            <div className="mt-4 flex gap-2">
-              <button type="submit" className="rounded-lg bg-teal-700 px-3 py-2 text-[12px] text-white">通过</button>
-              <button type="button" className="rounded-lg border border-gold-300 px-3 py-2 text-[12px] text-gold-800" onClick={() => decide([active.code], "returned")}>退回</button>
-            </div>
-          </form>
-        </div>
-      ) : null}
-      {toast ? <p className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-full bg-ink-900 px-4 py-2 text-[12px] text-white">{toast}</p> : null}
+      <Dialog
+        open={active !== null}
+        onOpenChange={(next) => {
+          if (!next) closeSheet();
+        }}
+      >
+        <DialogContent className="max-w-215">
+          <DialogHeader>
+            <DialogTitle>{active?.title || "未填写项目名称"}</DialogTitle>
+            <DialogDescription>
+              {detail
+                ? `${classLabels[detail.application.project_class] ?? detail.application.project_class} · ${statusLabels[detail.application.status] ?? detail.application.status}${detail.code ? ` · ${detail.code}` : ""}`
+                : "申报书"}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody>
+            {detailError ? (
+              <p className="mb-3 text-[12.5px] text-cinnabar">{detailError}</p>
+            ) : null}
+            {detail ? (
+              <ApplicationReading detail={detail.application} />
+            ) : active && !detailError ? (
+              <p className="text-[12.5px] text-ink-400">正在读取申报书…</p>
+            ) : null}
+            {detail ? (
+              <section className="mt-5 border-t border-ink-100 pt-4">
+                <h3 className="text-[13px] font-medium text-ink-900">
+                  审核记录
+                </h3>
+                <div className="mt-3">
+                  {timelineError ? (
+                    <p className="text-[12.5px] text-cinnabar">
+                      {timelineError}
+                    </p>
+                  ) : timeline ? (
+                    <ReviewTimeline events={timeline} />
+                  ) : (
+                    <p className="text-[12.5px] text-ink-400">
+                      正在读取审核记录…
+                    </p>
+                  )}
+                </div>
+              </section>
+            ) : null}
+            {detail && detail.assignments.length > 0 ? (
+              <section className="mt-5 border-t border-ink-100 pt-4">
+                <h3 className="text-[13px] font-medium text-ink-900">
+                  专家评审
+                  {detail.average_score
+                    ? ` · 平均分 ${detail.average_score}`
+                    : ""}
+                </h3>
+                <ul className="mt-2 space-y-2">
+                  {detail.assignments.map((item) => (
+                    <li
+                      key={item.id}
+                      className="rounded-lg bg-ink-50 px-3 py-2 text-[12.5px] text-ink-700"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span>
+                          {item.expert_name}
+                          {item.research_expertise
+                            ? ` · ${item.research_expertise}`
+                            : ""}
+                        </span>
+                        {item.reviewed ? (
+                          <span>
+                            {item.decision === "approved"
+                              ? "建议立项"
+                              : "不建议立项"}{" "}
+                            · {item.score}
+                          </span>
+                        ) : (
+                          <span className="text-ink-400">未提交</span>
+                        )}
+                      </div>
+                      {item.opinion ? (
+                        <p className="mt-1 whitespace-pre-wrap">
+                          {item.opinion}
+                        </p>
+                      ) : null}
+                      {!item.reviewed && canAssign ? (
+                        <Button
+                          className="mt-2"
+                          variant="destructive"
+                          size="sm"
+                          disabled={busy}
+                          onClick={() => void removeAssignment(item.id)}
+                        >
+                          撤销指派
+                        </Button>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+            {detail?.conclusion_opinion ? (
+              <p className="mt-4 text-[12.5px] text-ink-700">
+                结论说明：{detail.conclusion_opinion}
+              </p>
+            ) : null}
+            {canReview ? (
+              <div className="mt-5 space-y-3 border-t border-ink-100 pt-4">
+                <label className="block text-[12.5px] text-ink-700">
+                  封面编号
+                  <Input
+                    className="mt-1.5"
+                    value={code}
+                    placeholder="通过时必填，全局唯一"
+                    onChange={(event) => setCode(event.target.value)}
+                  />
+                </label>
+                <label className="block text-[12.5px] text-ink-700">
+                  审核意见
+                  <Textarea
+                    className="mt-1.5"
+                    value={opinion}
+                    placeholder="退回或不通过时必填"
+                    onChange={(event) => setOpinion(event.target.value)}
+                  />
+                </label>
+              </div>
+            ) : null}
+            {canAssign ? (
+              <div className="mt-5 border-t border-ink-100 pt-4">
+                <h3 className="text-[13px] font-medium text-ink-900">
+                  指派专家
+                </h3>
+                <Input
+                  className="mt-2"
+                  value={expertQuery}
+                  placeholder="按姓名或研究专长筛选"
+                  onChange={(event) => setExpertQuery(event.target.value)}
+                />
+                <div className="mt-2 max-h-40 space-y-2 overflow-y-auto">
+                  {visibleExperts.map((person) => (
+                    <label
+                      key={person.id}
+                      className="flex items-start gap-2 text-[12.5px] text-ink-700"
+                    >
+                      <Checkbox
+                        className="mt-0.5"
+                        checked={picked.includes(person.id)}
+                        onCheckedChange={(value) =>
+                          setPicked((current) =>
+                            value === true
+                              ? [...current, person.id]
+                              : current.filter((id) => id !== person.id),
+                          )
+                        }
+                      />
+                      <span>
+                        {person.real_name} · {person.department_name}
+                        {person.research_expertise
+                          ? ` · ${person.research_expertise}`
+                          : ""}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {detail?.ready_to_conclude ? (
+              <label className="mt-4 block text-[12.5px] text-ink-700">
+                结论说明
+                <Textarea
+                  className="mt-1.5"
+                  value={opinion}
+                  placeholder="申报人可以看到这段说明"
+                  onChange={(event) => setOpinion(event.target.value)}
+                />
+              </label>
+            ) : null}
+            {formError ? (
+              <p className="mt-2 text-[12.5px] text-cinnabar">{formError}</p>
+            ) : null}
+          </DialogBody>
+          {canReview || canAssign || detail?.ready_to_conclude ? (
+            <DialogFooter className="justify-between">
+              {canReview ? (
+                <Button
+                  variant="destructive"
+                  disabled={busy || !detail}
+                  onClick={() => ask("rejected")}
+                >
+                  不通过
+                </Button>
+              ) : (
+                <span />
+              )}
+              <div className="flex gap-2">
+                {canReview ? (
+                  <Button
+                    variant="warning"
+                    disabled={busy || !detail}
+                    onClick={() => ask("returned")}
+                  >
+                    退回
+                  </Button>
+                ) : null}
+                {canReview ? (
+                  <Button
+                    disabled={busy || !detail}
+                    onClick={() => ask("approved")}
+                  >
+                    通过
+                  </Button>
+                ) : null}
+                {canAssign ? (
+                  <Button
+                    disabled={busy || !detail}
+                    onClick={() => ask("assign")}
+                  >
+                    指派所选专家
+                  </Button>
+                ) : null}
+                {detail?.ready_to_conclude ? (
+                  <Button
+                    variant="destructive"
+                    disabled={busy}
+                    onClick={() => ask("expert_rejected")}
+                  >
+                    不予立项
+                  </Button>
+                ) : null}
+                {detail?.ready_to_conclude ? (
+                  <Button disabled={busy} onClick={() => ask("established")}>
+                    立项
+                  </Button>
+                ) : null}
+              </div>
+            </DialogFooter>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+      <ConfirmDialog
+        open={pendingAction !== null}
+        title="确认提交"
+        description={confirmCopy(pendingAction, active?.title)}
+        confirmLabel="确认"
+        busy={busy}
+        onConfirm={() => void confirm()}
+        onClose={() => {
+          if (!busy) setPendingAction(null);
+        }}
+      />
     </WorkspaceShell>
   );
 }
 
-function labelOf(status: Status) {
-  if (status === "pending") return "待复核";
-  if (status === "blind") return "盲审待回收";
-  if (status === "passed") return "已通过";
-  return "已退回";
+function confirmCopy(action: string | null, title: string | null | undefined) {
+  const name = title?.trim() || "未填写项目名称";
+  if (action === "assign")
+    return `确认把「${name}」发给所选专家。未提交评审前可以撤销。`;
+  if (action === "established" || action === "expert_rejected")
+    return `确认「${name}」的立项结论。申报人可以看到结论说明。`;
+  return `确认「${name}」的审核结论。提交后不能在这里修改。`;
+}
+
+function canAct(status: string) {
+  return (
+    status === "dept_approved" ||
+    status === "office_approved" ||
+    status === "expert_reviewing"
+  );
 }

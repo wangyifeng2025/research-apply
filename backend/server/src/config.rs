@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::error::AppError;
 
 pub const AUTH_COOKIE: &str = "research_apply_session";
@@ -10,6 +12,7 @@ pub struct Config {
     pub cors_origin: String,
     pub jwt_secret: String,
     pub cookie_secure: bool,
+    pub attachment_dir: PathBuf,
 }
 
 impl Config {
@@ -22,6 +25,9 @@ impl Config {
             jwt_secret: required_env("JWT_SECRET")?,
             cookie_secure: std::env::var("COOKIE_SECURE")
                 .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true")),
+            attachment_dir: std::env::var("ATTACHMENT_DIR")
+                .unwrap_or_else(|_| "data/attachments".to_owned())
+                .into(),
         })
     }
 

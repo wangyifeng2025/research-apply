@@ -177,7 +177,7 @@ stateDiagram-v2
 | F-11 | 撤回 | 仅 `submitted` 且系审核人尚未处理时可撤回为草稿 |
 | F-12 | 我的申报 | 列表显示批次、类别、项目名称、状态、提交时间；可按批次和状态筛选 |
 | F-13 | 审核进度 | 时间线展示每一级的审核结论和意见；专家意见匿名展示，不显示专家身份 |
-| F-14 | 导出申报书 | 按纸质表格版式导出 PDF / Word（二期） |
+| F-14 | 导出申报书 | 按 2026 年院级社会科学类（附件 2）、自然科学类（附件 3）纸质申报书版式导出 PDF。双高专项使用自然科学类版式，并标明 D 类。封面写入年度、编号、项目名称、类别、负责人、联系电话、部门和填表日期；正文按模板栏目排版。经费在系统中按万元保存，导出为印刷稿使用的元（1 万元 = 10000 元）。系审核完成后，第八部分写入四项确认、结论和意见。教师可导出本人申报；本部门系审核人、科研处和管理员可导出。专家不能导出，避免带出负责人、参加者和推荐人身份。Word 导出仍不在本期 |
 
 ### 5.3 系审核端
 
@@ -337,6 +337,7 @@ stateDiagram-v2
 | 2026-10-20 | `applications` 新增 `concluded_by`、`concluded_at`、`conclusion_opinion` 记录立项结论 |
 | 2026-10-20 | 新增 `notifications`（站内通知）、`audit_logs`（操作审计）两张表和 `notification_kind` 枚举 |
 | 2026-10-20 | `expert_assignments` 不能自己指派自己；附件大小上限 20 MB、存储键唯一；新增审核人、参加者用户、通知、审计索引 |
+| 2026-11-11 | F-14 改为按 2026 年社科、自科纸质申报书导出 PDF。不改表结构。经费导出时由万元换算为元。专家不能下载这份带身份信息的 PDF |
 
 以上变更直接改写在初始迁移 `m20260929_000001_init_schema` 中（项目尚无数据）。今后的结构调整一律新增迁移文件，不再修改初始迁移。
 
@@ -354,24 +355,31 @@ stateDiagram-v2
 | | `GET /api/meta` | 流程步骤、项目类别、当前批次、科目数 | 已实现 |
 | 认证 | `POST /api/auth/login` | 登录 | 待开发 |
 | | `GET /api/auth/me` | 当前用户与角色 | 待开发 |
-| 基础数据 | `GET /api/departments` | 部门列表 | 待开发 |
-| | `GET /api/cycles`、`POST /api/cycles`、`PATCH /api/cycles/{id}` | 批次 | 待开发 |
-| | `GET /api/budget-subjects?family=social` | 经费科目字典 | 待开发 |
-| 管理 | `GET/POST /api/admin/users`、`PATCH /api/admin/users/{id}` | 用户与角色 | 待开发 |
+| 基础数据 | `GET /api/departments` | 部门列表 | 已实现 |
+| | `POST /api/admin/departments`、`PATCH/DELETE /api/admin/departments/{id}` | 部门增删改（管理员） | 已实现 |
+| | `GET /api/cycles`、`POST /api/cycles`、`PATCH /api/cycles/{id}` | 批次管理（科研处、管理员） | 已实现 |
+| | `GET /api/cycles/current` | 当前开放批次 | 已实现 |
+| | `GET /api/budget-subjects?family=social` | 经费科目字典 | 已实现 |
+| 管理 | `GET/POST /api/admin/users`、`PATCH/DELETE /api/admin/users/{id}` | 用户与多角色管理；已关联申报或审核数据的用户禁止删除 | 已实现 |
+| | `POST /api/admin/users/{id}/reset-password` | 重置密码（管理员） | 已实现 |
+| | `GET /api/profile`、`PATCH /api/profile` | 本人维护性别、民族、出生年月、职务、学历、学位、手机、邮箱；新建申报书复制这份资料 | 已实现 |
 | 申报书 | `POST /api/applications` | 新建（指定批次和类别） | 待开发 |
 | | `GET /api/applications/mine` | 我的申报 | 待开发 |
 | | `GET /api/applications/{id}` | 详情（按角色裁剪字段） | 待开发 |
 | | `PUT /api/applications/{id}/{section}` | 分栏目保存，`section` 取 `cover`、`basic`、`members`、`recommender`、`budget`、`ss-achievements`、`ss-design`、`ss-foundation`、`ss-outputs`、`ns-profile`、`ns-content`、`ns-indicators`、`ns-schedules`、`ns-equipments` | 待开发 |
 | | `POST /api/applications/{id}/submit` | 提交 | 待开发 |
 | | `POST /api/applications/{id}/withdraw` | 撤回 | 待开发 |
-| | `POST /api/applications/{id}/attachments`、`DELETE .../{attachment_id}` | 附件 | 待开发 |
+| | `POST /api/applications/{id}/attachments`、`GET/DELETE /api/applications/{id}/attachments/{attachment_id}` | 上传、下载、删除。仅 PDF/JPG/PNG，单个不超过 20 MB。负责人在可编辑状态上传和删除；专家下载不到签字件 | 已实现 |
 | 审核 | `GET /api/reviews/todo?stage=department` | 待办列表 | 待开发 |
 | | `POST /api/applications/{id}/reviews` | 系审核 / 科研处审核 | 待开发 |
 | | `POST /api/applications/{id}/assignments` | 指派专家 | 待开发 |
 | | `GET /api/expert/assignments`、`GET /api/expert/assignments/{id}` | 专家待评、匿名详情 | 待开发 |
 | | `POST /api/expert/assignments/{id}/review` | 专家提交意见 | 待开发 |
 | | `POST /api/applications/{id}/conclude` | 立项 / 不予立项 | 待开发 |
-| 统计 | `GET /api/stats/overview` | 科研处看板 | 待开发 |
+| | `GET /api/applications/{id}/timeline` | 审核时间线。申请人与系审核人看到的专家为「专家 1 / 2 / 3」，不含 `reviewer_id`；科研处和管理员可看到专家姓名 | 已实现 |
+| | `GET /api/applications/{id}/form.pdf` | 按 2026 年纸质申报书模板导出 PDF。教师导出本人申报；本部门系审核人、科研处和管理员可导出；专家返回 403 | 已实现 |
+| 统计 | `GET /api/stats/overview` | 科研处和管理员按批次、类别、部门、状态查看数量和申请经费 | 已实现 |
+| | `GET /api/stats/export` | 导出当前批次统计 Excel | 已实现 |
 | 通知 | `GET /api/notifications`、`GET /api/notifications/unread-count` | 消息列表、未读数 | 二期 |
 | | `POST /api/notifications/{id}/read`、`POST /api/notifications/read-all` | 标记已读 | 二期 |
 | 审计 | `GET /api/admin/audit-logs` | 审计查询（管理员） | 二期 |
@@ -381,6 +389,7 @@ stateDiagram-v2
 | 路由 | 页面 | 角色 | 状态 |
 |---|---|---|---|
 | `/` | 首页：当前批次、流程说明、服务状态 | 全部 | 已有静态版 |
+| `/403` | 无权限提示 | 全部 | 已实现 |
 | `/login` | 登录 | 全部 | 待开发 |
 | `/applications` | 我的申报 | 教师 | 已有静态版 |
 | `/applications/social/new` | 新建社会科学类申报 | 教师 | 已有栏目说明 |
@@ -390,8 +399,9 @@ stateDiagram-v2
 | `/reviews/department` | 系审核待办 | 系审核人 | 已有静态版 |
 | `/reviews/office` | 科研处审核、指派专家、立项 | 科研处 | 已有静态版 |
 | `/reviews/expert` | 专家盲审待办与评审 | 专家 | 已有静态版 |
-| `/stats` | 统计看板 | 科研处 | 待开发 |
-| `/admin/*` | 部门、用户、批次管理 | 管理员 | 待开发 |
+| `/stats` | 统计看板 | 科研处、管理员 | 已实现 |
+| `/profile` | 个人资料 | 全部登录用户 | 已实现 |
+| `/admin` | 部门、用户、批次管理 | 管理员 | 已实现 |
 
 交互要求：
 

@@ -1,13 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 
 import { Icon } from "@/components/icon";
+import { ReviewTimeline } from "@/components/review-timeline";
+import { ProfileEditor } from "@/components/profile-page";
 import { TeacherApply } from "@/components/teacher-apply";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { StickyTable } from "@/components/ui/sticky-table";
 import { SideNav, WorkspaceShell } from "@/components/workspace-shell";
 import { classLabels, fetchMine, statusLabels, type MineItem } from "@/lib/applications";
 import { ApiError } from "@/lib/api";
 import { readActiveLogin } from "@/lib/login";
+import { fetchTimeline, type TimelineEvent } from "@/lib/timeline";
 
 const cycleOpen = new Date(2026, 0, 1);
 const cycleClose = new Date(2026, 11, 31);
@@ -19,21 +25,36 @@ export function TeacherWorkspace() {
   const [applicationId, setApplicationId] = useState<string | null>(null);
   const [filter, setFilter] = useState("all");
   const [toast, setToast] = useState("");
-  const [name, setName] = useState("老师");
+  const name = useSyncExternalStore(subscribeLogin, teacherName, teacherNameOnServer);
+  const [tracks, setTracks] = useState<Record<string, { events: TimelineEvent[]; error: string }>>({});
 
   const reload = useCallback(async () => {
     try {
-      setItems(await fetchMine());
+      const next = await loadTeacherDesk();
+      setItems(next.items);
+      setTracks(next.tracks);
     } catch (error) {
       setToast(error instanceof ApiError ? error.message : "申报列表加载失败");
     }
   }, []);
 
   useEffect(() => {
-    void reload();
-    const stored = readActiveLogin();
-    if (stored?.realName) setName(stored.realName);
-  }, [reload]);
+    let cancelled = false;
+    async function load() {
+      try {
+        const next = await loadTeacherDesk();
+        if (cancelled) return;
+        setItems(next.items);
+        setTracks(next.tracks);
+      } catch (error) {
+        if (!cancelled) setToast(error instanceof ApiError ? error.message : "申报列表加载失败");
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const returned = items.filter((item) => item.status === "dept_returned" || item.status === "office_returned");
   const reviewing = items.filter((item) => ["submitted", "dept_approved", "office_approved", "expert_reviewing"].includes(item.status));
@@ -77,13 +98,15 @@ export function TeacherWorkspace() {
     { id: "history", label: "历史申报复用", icon: "mdi:history" },
     { id: "notice", label: "立项公示查询", icon: "mdi:bullhorn-outline", divider: true },
     { id: "message", label: "消息中心", icon: "mdi:message-text-outline", badge: returned.length ? String(returned.length) : undefined, gold: returned.length > 0 },
+    { id: "profile", label: "个人资料", icon: "mdi:account-outline", divider: true },
   ];
 
   return (
     <WorkspaceShell
       role="teacher"
-      section={section === "apply" ? "apply" : "desk"}
+      section={section === "apply" ? "apply" : section === "profile" ? "profile" : "desk"}
       onSection={(id) => setSection(id === "apply" ? "apply" : "desk")}
+      onProfile={() => setSection("profile")}
       subtitle="2026 年度申报周期"
       sidebar={
         <SideNav
@@ -92,7 +115,7 @@ export function TeacherWorkspace() {
           active={section}
           onSelect={setSection}
           footer={
-            <div className="mb-2 rounded-xl bg-gradient-to-br from-ink-900 to-ink-800 p-3.5 text-white">
+            <div className="mb-2 rounded-xl bg-linear-to-br from-ink-900 to-ink-800 p-3.5 text-white">
               <div className="flex items-center gap-2 text-[11px] text-ink-300">
                 <Icon name="mdi:calendar-clock-outline" className="text-sm text-teal-300" />
                 2026 年度申报
@@ -101,15 +124,17 @@ export function TeacherWorkspace() {
               <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-white/15">
                 <div className="h-full rounded-full bg-teal-400" style={{ width: `${elapsed}%` }} />
               </div>
-              <button type="button" onClick={() => ping("申报指南以科研处下发的正式文件为准")} className="mt-3 flex w-full items-center justify-center gap-1 rounded-md bg-white/10 py-1.5 text-[11px] text-ink-100">
+              <Button type="button" variant="ghost" onClick={() => ping("申报指南以科研处下发的正式文件为准")} className="mt-3 h-auto w-full bg-white/10 py-1.5 text-[11px] text-ink-100 hover:bg-white/15 hover:text-white">
                 <Icon name="mdi:file-pdf-box" className="text-sm" />
                 申报说明
-              </button>
+              </Button>
             </div>
           }
         />
       }
     >
+      {section === "profile" ? <ProfileEditor /> : null}
+
       {section === "apply" ? (
         <TeacherApply
           key={applicationId ?? "new"}
@@ -141,12 +166,12 @@ export function TeacherWorkspace() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button type="button" onClick={() => setSection("history")} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-ink-200 bg-white px-3 text-[12px] font-medium text-ink-600">
+                  <Button variant="outline" size="lg" onClick={() => setSection("history")}>
                     <Icon name="mdi:content-duplicate" className="text-base" />历史复用
-                  </button>
-                  <button type="button" onClick={openNew} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 text-[12px] font-medium text-white shadow-sm">
+                  </Button>
+                  <Button size="lg" onClick={openNew}>
                     <Icon name="mdi:plus" className="text-base" />新建申报
-                  </button>
+                  </Button>
                 </div>
               </div>
               <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-teal-200/70 bg-teal-50/70 px-3.5 py-2.5 text-[11.5px] leading-5 text-teal-900">
@@ -166,9 +191,9 @@ export function TeacherWorkspace() {
                 <h1 className="text-[22px] font-semibold text-ink-900">我的申报</h1>
                 <p className="mt-1 text-[12.5px] text-ink-500">列表来自你本人负责的申报书。</p>
               </div>
-              <button type="button" onClick={openNew} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 text-[12px] font-medium text-white">
+              <Button size="lg" onClick={openNew}>
                 <Icon name="mdi:plus" className="text-base" />新建申报
-              </button>
+              </Button>
             </div>
           )}
 
@@ -179,9 +204,9 @@ export function TeacherWorkspace() {
                   <div className="flex items-center justify-between border-b border-ink-100 px-4 py-3.5">
                     <div className="flex items-center gap-2">
                       <h2 className="text-[14px] font-semibold text-ink-900">待办任务</h2>
-                      <span className="rounded-full bg-gold-50 px-2 py-0.5 text-[10px] font-medium text-gold-700">{returned.length} 项待处理</span>
+                      <Badge tone="gold">{returned.length} 项待处理</Badge>
                     </div>
-                    <button type="button" onClick={() => setSection("track")} className="text-[11px] font-medium text-teal-700">查看全部</button>
+                    <Button variant="subtle" size="sm" onClick={() => setSection("track")}>查看全部</Button>
                   </div>
                   {returned.length === 0 ? (
                     <p className="px-4 py-6 text-[12.5px] text-ink-400">没有被退回的申报书。</p>
@@ -192,7 +217,7 @@ export function TeacherWorkspace() {
                         <p className="text-[12.5px] font-medium text-ink-800">《{item.title || "未命名申报书"}》被退回</p>
                         <p className="mt-1 text-[11.5px] text-ink-500">{statusLabels[item.status]}。请打开申报书修改后重新提交。</p>
                       </div>
-                      <button type="button" onClick={() => openItem(item.id)} className="inline-flex shrink-0 items-center rounded-md border border-ink-200 px-2.5 py-1.5 text-[11px] font-medium text-ink-600">去修改</button>
+                      <Button variant="outline" size="sm" onClick={() => openItem(item.id)}>去修改</Button>
                     </div>
                   ))}
                 </section>
@@ -222,16 +247,16 @@ export function TeacherWorkspace() {
                 <section className="rounded-xl border border-ink-200/80 bg-white shadow-sm">
                   <div className="flex items-center justify-between border-b border-ink-100 px-4 py-3.5">
                     <h2 className="text-[14px] font-semibold text-ink-900">消息提醒</h2>
-                    <button type="button" onClick={() => setSection("message")} className="text-[11px] text-teal-700">查看全部</button>
+                    <Button variant="subtle" size="sm" onClick={() => setSection("message")}>查看全部</Button>
                   </div>
                   {returned.length === 0 ? <p className="px-4 py-5 text-[12px] text-ink-400">目前没有退回消息。</p> : returned.map((item) => (
-                    <button key={item.id} type="button" onClick={() => openItem(item.id)} className="flex w-full gap-2.5 border-t border-ink-100 px-4 py-3 text-left">
+                    <Button key={item.id} variant="ghost" onClick={() => openItem(item.id)} className="h-auto w-full justify-start gap-2.5 rounded-none border-t border-ink-100 px-4 py-3 text-left font-normal whitespace-normal">
                       <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-gold-500" />
                       <span>
                         <span className="block text-[11.5px] font-medium text-ink-800">{statusLabels[item.status]}</span>
                         <span className="mt-0.5 block text-[10.5px] leading-4 text-ink-500">《{item.title || "未命名申报书"}》需要修改后重新提交。</span>
                       </span>
-                    </button>
+                    </Button>
                   ))}
                 </section>
                 <section className="rounded-xl border border-teal-200/70 bg-teal-50/50 p-4">
@@ -257,9 +282,18 @@ export function TeacherWorkspace() {
                   <p className="text-[14px] font-medium text-ink-900">{item.title || "未命名申报书"}</p>
                   <p className="mt-1 text-[12px] text-ink-500">{classLabels[item.project_class]} · {statusLabels[item.status]}</p>
                 </div>
-                <button type="button" onClick={() => openItem(item.id)} className="text-[12px] text-teal-700">打开</button>
+                <Button variant="subtle" size="sm" onClick={() => openItem(item.id)}>打开</Button>
               </div>
               <Flow status={item.status} />
+              {item.status === "draft" ? null : (
+                <div className="mt-1 border-t border-ink-100 pt-3">
+                  {tracks[item.id] ? (
+                    tracks[item.id]?.error ? <p className="text-[12.5px] text-cinnabar">{tracks[item.id]?.error}</p> : <ReviewTimeline events={tracks[item.id]?.events ?? []} />
+                  ) : (
+                    <p className="text-[12.5px] text-ink-400">正在读取审核记录…</p>
+                  )}
+                </div>
+              )}
             </article>
           ))}
         </section>
@@ -284,15 +318,43 @@ export function TeacherWorkspace() {
         <section className="rounded-xl border border-ink-200 bg-white p-4 text-[13px] text-ink-600">
           <h1 className="text-[18px] font-semibold text-ink-900">消息中心</h1>
           {returned.length === 0 ? <p className="mt-3">目前没有退回消息。</p> : returned.map((item) => (
-            <button key={item.id} type="button" onClick={() => openItem(item.id)} className="mt-3 block w-full rounded-lg border border-ink-100 px-3 py-2 text-left">
+            <Button key={item.id} variant="outline" onClick={() => openItem(item.id)} className="mt-3 h-auto w-full justify-start px-3 py-2 font-normal whitespace-normal">
               {item.title || "未命名申报书"} · {statusLabels[item.status]}
-            </button>
+            </Button>
           ))}
         </section>
       ) : null}
       {toast ? <p className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-ink-900 px-4 py-2.5 text-[12px] text-white">{toast}</p> : null}
     </WorkspaceShell>
   );
+}
+
+async function loadTeacherDesk() {
+  const items = await fetchMine();
+  const tracked = items.filter((item) => item.status !== "draft");
+  const loaded = await Promise.all(
+    tracked.map(async (item) => {
+      try {
+        return [item.id, { events: await fetchTimeline(item.id), error: "" }] as const;
+      } catch (error) {
+        const message = error instanceof ApiError ? error.message : "审核记录读取失败";
+        return [item.id, { events: [] as TimelineEvent[], error: message }] as const;
+      }
+    }),
+  );
+  return { items, tracks: Object.fromEntries(loaded) };
+}
+
+function subscribeLogin() {
+  return () => undefined;
+}
+
+function teacherName() {
+  return readActiveLogin()?.realName || "老师";
+}
+
+function teacherNameOnServer() {
+  return "老师";
 }
 
 function hello(date: Date) {
@@ -353,45 +415,40 @@ function ProjectTable({ items, total, drafts, reviewing, done, filter, onFilter,
           <h2 className="text-[14px] font-semibold text-ink-900">我的申报</h2>
           <span className="text-[11px] text-ink-400">2026 年度</span>
         </div>
-        <div className="flex items-center gap-1 rounded-md bg-ink-50 p-0.5 text-[11px]">
+        <div className="flex items-center gap-1 rounded-md bg-ink-50 p-0.5">
           {tabs.map(([id, label]) => (
-            <button key={id} type="button" onClick={() => onFilter(id ?? "all")} className={`rounded px-2.5 py-1 ${filter === id ? "bg-white font-medium text-ink-800 shadow-sm" : "text-ink-500"}`}>{label}</button>
+            <Button key={id} variant={filter === id ? "outline" : "ghost"} size="sm" className={filter === id ? "bg-white shadow-sm" : "text-ink-500"} onClick={() => onFilter(id ?? "all")}>{label}</Button>
           ))}
         </div>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[720px] text-left">
-          <thead>
-            <tr className="bg-ink-50/70 text-[10.5px] font-medium text-ink-500">
-              <th className="px-4 py-2.5">项目名称</th>
-              <th className="px-3 py-2.5">类别</th>
-              <th className="px-3 py-2.5">当前环节</th>
-              <th className="px-3 py-2.5">状态</th>
-              <th className="px-3 py-2.5">更新时间</th>
-              <th className="px-4 py-2.5 text-right">操作</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-ink-100 text-[12px]">
-            {items.length === 0 ? (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-ink-400">还没有申报书。点右上角新建一份草稿。</td></tr>
-            ) : items.map((item) => (
-              <tr key={item.id} className="hover:bg-ink-50/50">
-                <td className="px-4 py-3">
-                  <p className="font-medium text-ink-800">{item.title || "未命名申报书"}</p>
-                  <p className="mt-0.5 text-[10.5px] text-ink-400">{item.status === "draft" ? "草稿" : statusLabels[item.status]} · {stamp(item.updated_at)}</p>
-                </td>
-                <td className="px-3 py-3"><span className={`rounded border px-1.5 py-0.5 text-[10.5px] ${item.project_class === "natural" ? "border-teal-200 bg-teal-50 text-teal-700" : "border-ink-200 bg-ink-50 text-ink-600"}`}>{classLabels[item.project_class]}</span></td>
-                <td className="px-3 py-3 text-ink-600">{stageName(item.status)}</td>
-                <td className="px-3 py-3"><StatusPill status={item.status} /></td>
-                <td className="px-3 py-3 text-[11px] text-ink-400">{stamp(item.updated_at)}</td>
-                <td className="px-4 py-3 text-right">
-                  <button type="button" onClick={() => onOpen(item.id)} className="text-[11px] font-medium text-teal-700">{item.status === "draft" || item.status.endsWith("returned") ? "继续填写" : "查看"}</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <StickyTable
+        rows={items}
+        rowKey={(item) => item.id}
+        empty="还没有申报书。点右上角新建一份草稿。"
+        columns={[
+          {
+            header: "项目名称",
+            width: 280,
+            cell: (item) => (
+              <div>
+                <p className="font-medium text-ink-800">{item.title || "未命名申报书"}</p>
+                <p className="mt-0.5 text-[11px] text-ink-400">{item.status === "draft" ? "草稿" : statusLabels[item.status]} · {stamp(item.updated_at)}</p>
+                {item.conclusion_opinion ? <p className="mt-1 text-[11px] leading-5 text-ink-600">{item.conclusion_opinion}</p> : null}
+              </div>
+            ),
+          },
+          { header: "类别", width: 120, cell: (item) => <Badge tone={item.project_class === "natural" ? "teal" : "neutral"}>{classLabels[item.project_class]}</Badge> },
+          { header: "当前环节", width: 140, cell: (item) => stageName(item.status) },
+          { header: "状态", width: 120, cell: (item) => <StatusPill status={item.status} /> },
+          { header: "更新时间", width: 150, cell: (item) => stamp(item.updated_at) },
+          {
+            header: "操作",
+            width: 96,
+            align: "right",
+            cell: (item) => <Button variant="subtle" size="sm" onClick={() => onOpen(item.id)}>{item.status === "draft" || item.status.endsWith("returned") ? "继续填写" : "查看"}</Button>,
+          },
+        ]}
+      />
     </section>
   );
 }
@@ -399,8 +456,8 @@ function ProjectTable({ items, total, drafts, reviewing, done, filter, onFilter,
 function StatusPill({ status }: { status: string }) {
   const returned = status.endsWith("returned");
   const live = ["submitted", "dept_approved", "office_approved", "expert_reviewing"].includes(status);
-  const tone = status === "established" ? "bg-ink-900 text-white" : returned ? "bg-gold-50 text-gold-700" : live ? "bg-teal-50 text-teal-700" : "bg-ink-100 text-ink-600";
-  return <span className={`rounded-full px-2 py-1 text-[10.5px] font-medium ${tone}`}>{statusLabels[status] ?? status}</span>;
+  if (status === "established") return <Badge className="bg-ink-900 text-white">{statusLabels[status] ?? status}</Badge>;
+  return <Badge tone={returned ? "gold" : live ? "teal" : "neutral"}>{statusLabels[status] ?? status}</Badge>;
 }
 
 function HistoryCards({ items, onOpen, onAll }: { items: MineItem[]; onOpen: (id: string) => void; onAll?: () => void }) {
@@ -411,7 +468,7 @@ function HistoryCards({ items, onOpen, onAll }: { items: MineItem[]; onOpen: (id
           <h2 className="text-[14px] font-semibold text-ink-900">历史申报复用</h2>
           <p className="mt-0.5 text-[11px] text-ink-400">已立项项目可以打开查看。复制为新草稿尚未开通。</p>
         </div>
-        {onAll ? <button type="button" onClick={onAll} className="text-[11px] font-medium text-teal-700">全部记录</button> : null}
+        {onAll ? <Button variant="subtle" size="sm" onClick={onAll}>全部记录</Button> : null}
       </div>
       {items.length === 0 ? (
         <p className="px-4 py-6 text-[12.5px] text-ink-400">还没有已立项的申报可以复用。</p>
@@ -421,12 +478,12 @@ function HistoryCards({ items, onOpen, onAll }: { items: MineItem[]; onOpen: (id
             <div key={item.id} className="rounded-lg border border-ink-200 p-3">
               <div className="flex items-center justify-between">
                 <span className="text-[10.5px] text-ink-400">{classLabels[item.project_class]}</span>
-                <span className="rounded bg-ink-900 px-1.5 py-0.5 text-[9.5px] text-white">已立项</span>
+                <Badge className="bg-ink-900 text-white">已立项</Badge>
               </div>
               <p className="mt-2 line-clamp-2 text-[12px] font-medium leading-5 text-ink-800">{item.title || "未命名申报书"}</p>
-              <button type="button" onClick={() => onOpen(item.id)} className="mt-2.5 flex w-full items-center justify-center gap-1 rounded-md border border-ink-200 py-1.5 text-[11px] text-ink-600">
+              <Button variant="outline" size="sm" className="mt-2.5 w-full" onClick={() => onOpen(item.id)}>
                 <Icon name="mdi:content-duplicate" className="text-sm" />查看
-              </button>
+              </Button>
             </div>
           ))}
         </div>
@@ -440,7 +497,7 @@ function ProgressCard({ item, onOpen }: { item?: MineItem; onOpen: () => void })
     <section className="rounded-xl border border-ink-200/80 bg-white shadow-sm">
       <div className="flex items-center justify-between border-b border-ink-100 px-4 py-3.5">
         <h2 className="text-[14px] font-semibold text-ink-900">当前申报进度</h2>
-        {item ? <span className="rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-medium text-teal-700">{statusLabels[item.status]}</span> : null}
+        {item ? <Badge tone="teal">{statusLabels[item.status]}</Badge> : null}
       </div>
       <div className="p-4">
         {item ? (
@@ -449,7 +506,7 @@ function ProgressCard({ item, onOpen }: { item?: MineItem; onOpen: () => void })
             <p className="mt-1.5 text-[10.5px] text-ink-400">{classLabels[item.project_class]} · 更新于 {stamp(item.updated_at)}</p>
             {item.status === "draft" ? <p className="mt-3 text-[12px] text-ink-600">仍在填写申报书，尚未提交。</p> : null}
             <div className="mt-4"><Flow status={item.status} /></div>
-            <button type="button" onClick={onOpen} className="mt-3 flex h-8 w-full items-center justify-center gap-1 rounded-lg border border-ink-200 text-[11.5px] font-medium text-ink-600">打开这份申报书<Icon name="mdi:arrow-right" className="text-sm" /></button>
+            <Button variant="outline" className="mt-3 w-full" onClick={onOpen}>打开这份申报书<Icon name="mdi:arrow-right" className="text-sm" /></Button>
           </>
         ) : <p className="text-[12.5px] text-ink-400">还没有申报书。</p>}
       </div>
@@ -484,13 +541,13 @@ function Flow({ status }: { status: string }) {
 
 function StartCard({ icon, tone, title, text, onClick }: { icon: string; tone: "gold" | "teal"; title: string; text: string; onClick: () => void }) {
   return (
-    <button type="button" onClick={onClick} className="flex w-full items-start gap-3 rounded-lg border border-ink-200 p-3 text-left hover:border-teal-300 hover:bg-teal-50/40">
+    <Button variant="outline" onClick={onClick} className="h-auto w-full items-start justify-start gap-3 p-3 text-left font-normal whitespace-normal hover:border-teal-300 hover:bg-teal-50/40">
       <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${tone === "gold" ? "bg-gold-50 text-gold-600" : "bg-teal-50 text-teal-600"}`}><Icon name={icon} className="text-lg" /></span>
-      <span className="flex-1">
+      <span className="min-w-0 flex-1">
         <span className="block text-[12.5px] font-medium text-ink-800">{title}</span>
         <span className="mt-0.5 block text-[10.5px] leading-4 text-ink-500">{text}</span>
       </span>
       <Icon name="mdi:arrow-right" className="mt-1 text-base text-ink-300" />
-    </button>
+    </Button>
   );
 }

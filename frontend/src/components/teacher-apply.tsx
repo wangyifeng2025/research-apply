@@ -2,7 +2,15 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
+import { AttachmentPanel } from "@/components/attachment-panel";
+import { ExportPdfButton } from "@/components/export-pdf-button";
 import { Icon } from "@/components/icon";
+import { ReviewTimeline } from "@/components/review-timeline";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { StickyTable } from "@/components/ui/sticky-table";
+import { Textarea } from "@/components/ui/textarea";
 import {
   classLabels,
   createApplication,
@@ -22,6 +30,7 @@ import {
 } from "@/lib/applications";
 import { ApiError, type FieldIssue } from "@/lib/api";
 import { checkBasicSection } from "@/lib/checks";
+import { fetchTimeline, type TimelineEvent } from "@/lib/timeline";
 
 type Props = {
   applicationId: string | null;
@@ -62,6 +71,7 @@ function blankMember(): MemberInput {
 
 export function TeacherApply({ applicationId, onOpen, onClose, onChanged }: Props) {
   const [detail, setDetail] = useState<ApplicationDetail | null>(null);
+  const [timeline, setTimeline] = useState<{ id: string; events: TimelineEvent[]; error: string } | null>(null);
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -95,15 +105,25 @@ export function TeacherApply({ applicationId, onOpen, onClose, onChanged }: Prop
   const [commitment, setCommitment] = useState(false);
 
   useEffect(() => {
-    if (!applicationId) {
-      setDetail(null);
-      return;
-    }
+    if (!applicationId) return;
     let cancelled = false;
     void fetchApplication(applicationId)
-      .then((view) => {
+      .then(async (view) => {
         if (cancelled) return;
         applyView(view);
+        if (view.status === "draft") return;
+        try {
+          const events = await fetchTimeline(view.id);
+          if (!cancelled) setTimeline({ id: view.id, events, error: "" });
+        } catch (timelineError: unknown) {
+          if (!cancelled) {
+            setTimeline({
+              id: view.id,
+              events: [],
+              error: timelineError instanceof ApiError ? timelineError.message : "审核记录读取失败",
+            });
+          }
+        }
       })
       .catch((error: unknown) => {
         if (!cancelled) setMessage(error instanceof ApiError ? error.message : "申报书加载失败");
@@ -352,6 +372,7 @@ export function TeacherApply({ applicationId, onOpen, onClose, onChanged }: Prop
     try {
       const view = await submitApplication(detail.id);
       setDetail(view);
+      setTimeline({ id: view.id, events: await fetchTimeline(view.id).catch(() => []), error: "" });
       setMessage("申报书已提交，等待系部审核");
       onChanged();
     } catch (error) {
@@ -464,12 +485,13 @@ export function TeacherApply({ applicationId, onOpen, onClose, onChanged }: Prop
         </div>
         <div className="flex gap-2">
           {detail.status === "draft" ? (
-            <button type="button" onClick={() => void removeDraft()} className="inline-flex h-8 items-center gap-1 rounded-lg border border-red-200 px-3 text-[12px] text-red-600">删除草稿</button>
+            <Button variant="destructive" onClick={() => void removeDraft()}>删除草稿</Button>
           ) : null}
           {detail.status === "submitted" ? (
-            <button type="button" onClick={() => void withdraw()} className="inline-flex h-8 items-center gap-1 rounded-lg border border-ink-200 px-3 text-[12px] text-ink-600">撤回</button>
+            <Button variant="outline" onClick={() => void withdraw()}>撤回</Button>
           ) : null}
-          <button type="button" onClick={() => void leave()} className="inline-flex h-8 items-center gap-1 rounded-lg border border-ink-200 px-3 text-[12px] text-ink-600">返回列表</button>
+          <ExportPdfButton applicationId={detail.id} />
+          <Button variant="outline" onClick={() => void leave()}>返回列表</Button>
         </div>
       </div>
       <div className="mt-4 rounded-xl border border-ink-200/80 bg-white px-3 py-3 shadow-sm sm:px-5 sm:py-4">
@@ -482,10 +504,10 @@ export function TeacherApply({ applicationId, onOpen, onClose, onChanged }: Prop
       <ol className="flex gap-2 overflow-x-auto pb-1">
         {steps.map((item, index) => (
           <li key={item.id}>
-            <button type="button" onClick={() => void jump(index)} className={`flex min-w-[118px] items-center gap-2 rounded-lg border px-2.5 py-2 text-left ${index === step ? "border-teal-300 bg-teal-50" : "border-ink-200 bg-white"}`}>
+            <Button type="button" variant="outline" onClick={() => void jump(index)} className={`h-auto min-w-29.5 justify-start px-2.5 py-2 font-normal ${index === step ? "border-teal-300 bg-teal-50" : ""}`}>
               <span className={`flex h-6 w-6 items-center justify-center rounded text-[10px] font-semibold ${index <= step ? "bg-teal-700 text-white" : "bg-ink-100 text-ink-500"}`}>{item.mark}</span>
               <span className="truncate text-[11.5px] text-ink-700">{item.title}</span>
-            </button>
+            </Button>
           </li>
         ))}
       </ol>
@@ -506,13 +528,13 @@ export function TeacherApply({ applicationId, onOpen, onClose, onChanged }: Prop
             <div className="grid gap-3.5 sm:grid-cols-2">
               <label className="block sm:col-span-2">
                 <span className="field-label">项目名称</span>
-                <input className="field-input" maxLength={40} placeholder="应准确、简明反映研究内容，最多不超过 40 个汉字" value={title} disabled={locked} aria-invalid={issueOf("title") ? true : undefined} onChange={(event) => { clearIssue("title"); setTitle(event.target.value); }} />
+                <Input maxLength={40} placeholder="应准确、简明反映研究内容，最多不超过 40 个汉字" value={title} disabled={locked} aria-invalid={issueOf("title") ? true : undefined} onChange={(event) => { clearIssue("title"); setTitle(event.target.value); }} />
                 <p className="sheet-hint mt-1">最多不超过 40 个汉字，当前 {title.length}/40 字</p>
                 {issueOf("title") ? <span className="mt-1 block text-[11px] text-cinnabar">{issueOf("title")}</span> : null}
               </label>
               <label className="block sm:col-span-2">
                 <span className="field-label">关键词</span>
-                <input className="field-input" placeholder="最多不超过 5 个，各词之间用分号隔开" value={keywords} disabled={locked} aria-invalid={issueOf("keywords") ? true : undefined} onChange={(event) => { clearIssue("keywords"); setKeywords(event.target.value); }} />
+                <Input placeholder="最多不超过 5 个，各词之间用分号隔开" value={keywords} disabled={locked} aria-invalid={issueOf("keywords") ? true : undefined} onChange={(event) => { clearIssue("keywords"); setKeywords(event.target.value); }} />
                 <p className="sheet-hint mt-1">最多不超过 5 个，各词之间用分号隔开</p>
                 {issueOf("keywords") ? <span className="mt-1 block text-[11px] text-cinnabar">{issueOf("keywords")}</span> : null}
               </label>
@@ -598,7 +620,7 @@ export function TeacherApply({ applicationId, onOpen, onClose, onChanged }: Prop
         ) : null}
         {current?.id === "content" ? (
           <Chapter mark="二" title="主要研究内容" aside="自然科学类模板" hint="主要填写目标与任务需求分析，主要技术难点和问题分析，研究与开发任务与内容，关键技术、技术难点、创新点等">
-            <textarea className="field-textarea" rows={14} value={researchContent} disabled={locked} aria-label="主要研究内容" onChange={(event) => setResearchContent(event.target.value)} />
+            <Textarea className="min-h-72" rows={14} value={researchContent} disabled={locked} aria-label="主要研究内容" onChange={(event) => setResearchContent(event.target.value)} />
           </Chapter>
         ) : null}
         {current?.id === "indicator" ? (
@@ -634,28 +656,27 @@ export function TeacherApply({ applicationId, onOpen, onClose, onChanged }: Prop
         ) : null}
         {current?.id === "budget" ? (
           <Chapter mark="六" title="经费预算" aside="单位：万元" hint="申报书印刷稿金额栏写的是元。系统按万元保存，请按万元填写。绩效支出含在间接费用中，不重复计入合计。">
-            <div className="overflow-x-auto rounded-lg border border-ink-200">
-              <table className="sheet-table min-w-[640px]">
-                <thead><tr><th className="w-12">序号</th><th>支出科目</th><th className="w-40">金额（万元）</th></tr></thead>
-                <tbody>
-                  {budget.map((line, index) => (
-                    <tr key={line.code}>
-                      <td className="text-center text-ink-400">{index + 1}</td>
-                      <td className={line.fillable ? "" : "font-medium"}>{line.name}</td>
-                      <td>
-                        {line.fillable ? (
-                          <>
-                            <input className="field-input" value={line.amount} disabled={locked} aria-invalid={issueOf(`budget.${line.code}`) ? true : undefined} onChange={(event) => { clearIssue(`budget.${line.code}`); setBudget(budget.map((item) => item.code === line.code ? { ...item, amount: event.target.value } : item)); }} />
-                            {issueOf(`budget.${line.code}`) ? <span className="mt-1 block text-[10.5px] text-cinnabar">{issueOf(`budget.${line.code}`)}</span> : null}
-                          </>
-                        ) : (
-                          <span className="text-ink-400">{line.group_name === "total" ? (direct + indirect).toFixed(2) : line.group_name === "direct" ? direct.toFixed(2) : line.amount}</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="overflow-hidden rounded-lg border border-ink-200">
+              <StickyTable
+                rows={budget}
+                rowKey={(line) => line.code}
+                columns={[
+                  { header: "序号", width: 64, cell: (line) => <span className="text-ink-400">{budget.findIndex((item) => item.code === line.code) + 1}</span> },
+                  { header: "支出科目", width: 280, cell: (line) => <span className={line.fillable ? "" : "font-medium"}>{line.name}</span> },
+                  {
+                    header: "金额（万元）",
+                    width: 180,
+                    cell: (line) => line.fillable ? (
+                      <div>
+                        <Input value={line.amount} disabled={locked} aria-invalid={issueOf(`budget.${line.code}`) ? true : undefined} onChange={(event) => { clearIssue(`budget.${line.code}`); setBudget(budget.map((item) => item.code === line.code ? { ...item, amount: event.target.value } : item)); }} />
+                        {issueOf(`budget.${line.code}`) ? <span className="mt-1 block text-[10.5px] text-cinnabar">{issueOf(`budget.${line.code}`)}</span> : null}
+                      </div>
+                    ) : (
+                      <span className="text-ink-400">{line.group_name === "total" ? (direct + indirect).toFixed(2) : line.group_name === "direct" ? direct.toFixed(2) : line.amount}</span>
+                    ),
+                  },
+                ]}
+              />
             </div>
             <div className="flex flex-wrap items-center justify-end gap-4 text-[12px]">
               <span className="text-ink-500">直接费用小计 <span className="font-medium text-ink-800">{direct.toFixed(2)} 万元</span></span>
@@ -679,9 +700,20 @@ export function TeacherApply({ applicationId, onOpen, onClose, onChanged }: Prop
         {current?.id === "dept" ? (
           <Chapter mark="八" title="部门审核意见" aside="申报人只读">
             <p className="text-[12.5px] leading-6 text-ink-600">本栏由项目负责人所在部门填写审核意见、负责人签字和部门盖章。教师不能在这里写入意见。</p>
-            <div className="rounded-lg border border-dashed border-ink-200 bg-ink-50/70 p-4 text-[12.5px] text-ink-500">
-              当前状态：{statusLabels[detail.status] ?? detail.status}。意见在系部初审环节产生。
-            </div>
+            {detail.status === "draft" ? (
+              <div className="rounded-lg border border-dashed border-ink-200 bg-ink-50/70 p-4 text-[12.5px] text-ink-500">
+                当前状态：{statusLabels[detail.status] ?? detail.status}。意见在系部初审环节产生。
+              </div>
+            ) : (
+              <div>
+                <p className="text-[12.5px] leading-6 text-ink-600">各级审核意见按时间排列。专家显示为「专家 1、专家 2」，不出现专家姓名。</p>
+                {timeline?.id === detail.id ? (
+                  timeline.error ? <p className="mt-3 text-[12.5px] text-cinnabar">{timeline.error}</p> : <div className="mt-3"><ReviewTimeline events={timeline.events} /></div>
+                ) : (
+                  <p className="mt-3 text-[12.5px] text-ink-400">正在读取审核记录…</p>
+                )}
+              </div>
+            )}
           </Chapter>
         ) : null}
         {current?.id === "preview" ? (
@@ -691,25 +723,34 @@ export function TeacherApply({ applicationId, onOpen, onClose, onChanged }: Prop
             <p className="text-[13px] text-ink-700">参加者：{members.filter((row) => row.name.trim()).length} 人</p>
             <div className="rounded-lg border border-ink-200 bg-ink-50/40 p-3 text-[11.5px] leading-5 text-ink-600">{commitmentText}</div>
             <label className="flex items-start gap-2 text-[12.5px] text-ink-700">
-              <input type="checkbox" className="mt-0.5" checked={commitment} disabled={locked} onChange={(event) => setCommitment(event.target.checked)} />
+              <Checkbox className="mt-0.5" checked={commitment} disabled={locked} onCheckedChange={(value) => setCommitment(value === true)} />
               我确认填写内容真实，没有知识产权争议，同意以本申请作为有约束力的协议。
             </label>
             {detail.editable ? (
-              <button type="button" disabled={busy} onClick={() => void submit()} className="inline-flex h-9 items-center gap-1 rounded-lg bg-teal-700 px-4 text-[12.5px] font-medium text-white disabled:opacity-50">
+              <Button size="lg" disabled={busy} onClick={() => void submit()}>
                 <Icon name="mdi:send-outline" />确认提交
-              </button>
+              </Button>
             ) : <p className="text-[12px] text-ink-500">这份申报书当前不能修改。</p>}
           </Chapter>
         ) : null}
       </div>
 
+      <div className="mt-4">
+        <AttachmentPanel
+          applicationId={detail.id}
+          items={detail.attachments}
+          editable={detail.editable}
+          onChanged={(attachments) => setDetail({ ...detail, attachments })}
+        />
+      </div>
+
       {current?.id !== "preview" ? (
         <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-ink-200/80 bg-white px-4 py-3">
-          <button type="button" disabled={step === 0 || busy} onClick={() => void jump(step - 1)} className="inline-flex h-8 items-center gap-1 rounded-lg border border-ink-200 px-3 text-[11.5px] disabled:opacity-40"><Icon name="mdi:arrow-left" className="text-sm" />上一步</button>
+          <Button variant="outline" disabled={step === 0 || busy} onClick={() => void jump(step - 1)}><Icon name="mdi:arrow-left" className="text-sm" />上一步</Button>
           <div className="flex items-center gap-2">
             {issues.length > 0 ? <span className="text-[12px] text-cinnabar">请按上面列出的位置修改</span> : null}
-            {detail.editable && current?.id !== "dept" ? <button type="button" disabled={busy} onClick={() => void persist(false)} className="inline-flex h-8 items-center gap-1 rounded-lg border border-ink-200 px-3 text-[11.5px]"><Icon name="mdi:content-save-outline" className="text-sm" />保存草稿</button> : null}
-            <button type="button" disabled={busy || step >= steps.length - 1} onClick={() => void persist(true)} className="inline-flex h-8 items-center gap-1 rounded-lg bg-teal-700 px-3.5 text-[11.5px] font-medium text-white disabled:opacity-40">下一步{steps[step + 1] ? `：${steps[step + 1]?.title}` : ""}<Icon name="mdi:arrow-right" className="text-sm" /></button>
+            {detail.editable && current?.id !== "dept" ? <Button variant="outline" disabled={busy} onClick={() => void persist(false)}><Icon name="mdi:content-save-outline" className="text-sm" />保存草稿</Button> : null}
+            <Button disabled={busy || step >= steps.length - 1} onClick={() => void persist(true)}>下一步{steps[step + 1] ? `：${steps[step + 1]?.title}` : ""}<Icon name="mdi:arrow-right" className="text-sm" /></Button>
           </div>
         </div>
       ) : null}
@@ -731,7 +772,7 @@ function sumBudget(lines: ApplicationDetail["budget"]["lines"], group: string) {
 
 function CategoryCard({ icon, tone, title, text, chips, action, onClick, disabled }: { icon: string; tone: "gold" | "teal"; title: string; text: string; chips: string[]; action: string; onClick: () => void; disabled: boolean }) {
   return (
-    <button type="button" disabled={disabled} onClick={onClick} className="rounded-xl border border-ink-200 bg-white p-4 text-left transition hover:border-teal-300 disabled:opacity-50">
+    <Button type="button" variant="outline" disabled={disabled} onClick={onClick} className="h-auto w-full flex-col items-stretch justify-start gap-0 rounded-xl p-4 text-left font-normal whitespace-normal hover:border-teal-300">
       <span className={`flex h-10 w-10 items-center justify-center rounded-lg ${tone === "gold" ? "bg-gold-50 text-gold-600" : "bg-teal-50 text-teal-600"}`}><Icon name={icon} className="text-xl" /></span>
       <h3 className="mt-3 text-[13.5px] font-semibold text-ink-900">{title}</h3>
       <p className="mt-1 text-[11px] leading-5 text-ink-500">{text}</p>
@@ -740,7 +781,7 @@ function CategoryCard({ icon, tone, title, text, chips, action, onClick, disable
         <span className="text-[10px] text-ink-400">{action}</span>
         <span className="inline-flex items-center gap-1 font-medium text-teal-700">选择并进入<Icon name="mdi:arrow-right" className="text-sm" /></span>
       </div>
-    </button>
+    </Button>
   );
 }
 
@@ -763,14 +804,14 @@ function Field({ name, label, value, onChange, onClear, issue, disabled, type = 
   return (
     <label className="block">
       <span className="field-label">{label}</span>
-      <input className="field-input" type={type} value={value} disabled={disabled} aria-invalid={issue ? true : undefined} onChange={(event) => { if (name) onClear?.(name); onChange(event.target.value); }} />
+      <Input type={type} value={value} disabled={disabled} aria-invalid={issue ? true : undefined} onChange={(event) => { if (name) onClear?.(name); onChange(event.target.value); }} />
       {issue ? <span className="mt-1 block text-[11px] text-cinnabar">{issue}</span> : null}
     </label>
   );
 }
 
 function ReadOnly({ label, value }: { label: string; value: string }) {
-  return <label className="block"><span className="field-label">{label}</span><input className="field-input bg-ink-50 text-ink-600" value={value} readOnly /></label>;
+  return <label className="block"><span className="field-label">{label}</span><Input className="bg-ink-50 text-ink-600" value={value} readOnly /></label>;
 }
 
 function Area({ label, hint, value, onChange, disabled }: { label: string; hint?: string; value: string; onChange: (value: string) => void; disabled?: boolean }) {
@@ -778,42 +819,53 @@ function Area({ label, hint, value, onChange, disabled }: { label: string; hint?
     <label className="block">
       <span className="field-label">{label}</span>
       {hint ? <p className="sheet-hint mb-1.5">{hint}</p> : null}
-      <textarea className="field-textarea" rows={5} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
+      <Textarea rows={5} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
 }
 
 function RowEditor<T extends object>({ title, hint, addLabel = "新增", columns, rows, keys, disabled, problem, onClear, onChange, onAdd, onRemove, extraHeader, extra }: { title: string; hint?: string; addLabel?: string; columns: string[]; rows: T[]; keys: string[]; disabled?: boolean; problem?: (index: number, key: string) => string | undefined; onClear?: (index: number, key: string) => void; onChange: (index: number, key: string, value: string) => void; onAdd: () => void; onRemove: (index: number) => void; extraHeader?: string; extra?: (row: T) => string }) {
+  const indexed = rows.map((row, index) => ({ index, row }));
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2">
         <p className="text-[12.5px] font-semibold text-ink-800">{title}</p>
         {hint ? <span className="sheet-hint">{hint}</span> : null}
-        <button type="button" disabled={disabled} onClick={onAdd} className="ml-auto inline-flex h-7 items-center gap-1 rounded-md border border-teal-200 bg-teal-50 px-2.5 text-[10.5px] font-medium text-teal-700 disabled:opacity-40"><Icon name="mdi:plus" className="text-sm" />{addLabel}</button>
+        <Button variant="subtle" size="sm" className="ml-auto" disabled={disabled} onClick={onAdd}><Icon name="mdi:plus" className="text-sm" />{addLabel}</Button>
       </div>
-      <div className="mt-2 overflow-x-auto rounded-lg border border-ink-200">
-        <table className="sheet-table min-w-[760px]">
-          <thead><tr><th className="w-12">序号</th>{columns.map((column) => <th key={column}>{column}</th>)}{extraHeader ? <th className="w-28">{extraHeader}</th> : null}<th className="w-14">操作</th></tr></thead>
-          <tbody>
-            {rows.length === 0 ? <tr><td colSpan={columns.length + (extraHeader ? 3 : 2)} className="px-3 py-4 text-center text-ink-400">还没有记录，点右上角新增</td></tr> : null}
-            {rows.map((row, index) => (
-              <tr key={`${title}-${index}`}>
-                <td className="text-center text-ink-400">{index + 1}</td>
-                {keys.map((key) => {
-                  const issue = problem?.(index, key);
-                  return (
-                    <td key={key}>
-                      <input value={String((row as Record<string, string>)[key] ?? "")} disabled={disabled} aria-invalid={issue ? true : undefined} placeholder={key === "birth_date" ? "1976-12" : undefined} onChange={(event) => { onClear?.(index, key); onChange(index, key, event.target.value); }} />
-                      {issue ? <span className="mt-1 block text-[10.5px] text-cinnabar">{issue}</span> : null}
-                    </td>
-                  );
-                })}
-                {extra ? <td className="text-ink-600">{extra(row)}</td> : null}
-                <td><button type="button" disabled={disabled} onClick={() => onRemove(index)} className="text-red-600 disabled:opacity-40" aria-label="删除行"><Icon name="mdi:delete-outline" /></button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="mt-2 overflow-hidden rounded-lg border border-ink-200">
+        <StickyTable
+          rows={indexed}
+          rowKey={(item) => `${title}-${item.index}`}
+          empty="还没有记录，点右上角新增"
+          columns={[
+            { header: "序号", width: 64, cell: (item) => <span className="text-ink-400">{item.index + 1}</span> },
+            ...keys.map((key, columnIndex) => ({
+              header: columns[columnIndex] ?? key,
+              width: 168,
+              cell: (item: { index: number; row: T }) => {
+                const issue = problem?.(item.index, key);
+                return (
+                  <div>
+                    <Input value={String((item.row as Record<string, string>)[key] ?? "")} disabled={disabled} aria-invalid={issue ? true : undefined} placeholder={key === "birth_date" ? "1976-12" : undefined} onChange={(event) => { onClear?.(item.index, key); onChange(item.index, key, event.target.value); }} />
+                    {issue ? <span className="mt-1 block text-[10.5px] text-cinnabar">{issue}</span> : null}
+                  </div>
+                );
+              },
+            })),
+            ...(extraHeader && extra ? [{ header: extraHeader, width: 112, cell: (item: { index: number; row: T }) => <span className="text-ink-600">{extra(item.row)}</span> }] : []),
+            {
+              header: "操作",
+              width: 72,
+              align: "right" as const,
+              cell: (item: { index: number; row: T }) => (
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600" disabled={disabled} aria-label="删除行" onClick={() => onRemove(item.index)}>
+                  <Icon name="mdi:delete-outline" />
+                </Button>
+              ),
+            },
+          ]}
+        />
       </div>
     </div>
   );
@@ -837,8 +889,9 @@ function IndicatorSheet({ indicators, locked, onIndicators }: {
     const stored = indicators[key];
     const blank = stored === null || stored === undefined || stored === "" || Number(stored) === 0;
     return (
-      <input
+      <Input
         aria-label={label}
+        className="h-7 px-1 text-center"
         type="number"
         min={0}
         step={money ? "0.01" : "1"}
@@ -1020,8 +1073,9 @@ function IndicatorSheet({ indicators, locked, onIndicators }: {
             <tr><th colSpan={6} className="band">（二）主要技术经济指标及社会效益说明</th></tr>
             <tr>
               <td colSpan={6}>
-                <textarea
+                <Textarea
                   aria-label="主要技术经济指标及社会效益说明"
+                  className="min-h-32 text-left"
                   rows={8}
                   disabled={locked}
                   value={String(indicators.benefit_note ?? "")}
