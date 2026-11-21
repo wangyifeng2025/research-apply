@@ -50,7 +50,7 @@ const sections: Array<{ id: OfficeScope; label: string; icon: string }> = [
   { id: "assign", label: "待指派", icon: "mdi:account-supervisor-outline" },
   { id: "reviewing", label: "盲审中", icon: "mdi:gavel" },
   { id: "conclude", label: "待立项", icon: "mdi:clipboard-check-outline" },
-  { id: "established", label: "已立项", icon: "mdi:check-decagram-outline" },
+  { id: "established", label: "拟立项", icon: "mdi:check-decagram-outline" },
   { id: "expert_rejected", label: "不予立项", icon: "mdi:file-alert-outline" },
   { id: "returned", label: "已退回", icon: "mdi:file-undo-outline" },
   { id: "rejected", label: "不通过", icon: "mdi:close" },
@@ -60,8 +60,8 @@ const emptyText: Record<OfficeScope, string> = {
   pending: "还没有待科研处审核的申报。",
   assign: "还没有等待指派专家的申报。",
   reviewing: "没有正在盲审的申报。",
-  conclude: "没有专家已经全部提交、等待立项的申报。",
-  established: "还没有立项的申报。",
+  conclude: "没有专家已经全部提交、等待拟立项的申报。",
+  established: "还没有拟立项的申报。",
   expert_rejected: "还没有不予立项的申报。",
   returned: "还没有退回的申报。",
   rejected: "还没有不通过的申报。",
@@ -244,7 +244,7 @@ export function OfficeWorkspace() {
         });
         setNotice(
           pendingAction === "established"
-            ? "已立项。结论说明申报人可见。"
+            ? "已记为拟立项。结论说明申报人可见。"
             : "已不予立项。结论说明申报人可见。",
         );
         setSection(pendingAction);
@@ -664,7 +664,7 @@ export function OfficeWorkspace() {
                 ) : null}
                 {detail?.ready_to_conclude ? (
                   <Button disabled={busy} onClick={() => ask("established")}>
-                    立项
+                    拟立项
                   </Button>
                 ) : null}
               </div>
@@ -691,8 +691,10 @@ function confirmCopy(action: string | null, title: string | null | undefined) {
   const name = title?.trim() || "未填写项目名称";
   if (action === "assign")
     return `确认把「${name}」发给所选专家。未提交评审前可以撤销。`;
-  if (action === "established" || action === "expert_rejected")
-    return `确认「${name}」的立项结论。申报人可以看到结论说明。`;
+  if (action === "established")
+    return `确认把「${name}」记为拟立项。院长办公会通过前，这还不是最终立项。申报人可以看到结论说明。`;
+  if (action === "expert_rejected")
+    return `确认「${name}」不予立项。申报人可以看到结论说明。`;
   return `确认「${name}」的审核结论。提交后不能在这里修改。`;
 }
 

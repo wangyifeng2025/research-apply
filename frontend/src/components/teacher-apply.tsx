@@ -29,7 +29,7 @@ import {
   type TextRow,
 } from "@/lib/applications";
 import { ApiError, type FieldIssue } from "@/lib/api";
-import { checkBasicSection } from "@/lib/checks";
+import { checkBasicSection, keywordCount, limitKeywords } from "@/lib/checks";
 import { fetchTimeline, type TimelineEvent } from "@/lib/timeline";
 
 type Props = {
@@ -343,8 +343,12 @@ export function TeacherApply({ applicationId, onOpen, onClose, onChanged }: Prop
       return;
     }
     if (section === "equip") {
+      const kept = equipments.filter((row) => row.name_spec.trim() && !pricedBelowMinimum(row));
+      if (kept.length !== equipments.filter((row) => row.name_spec.trim()).length) {
+        setEquipments(equipments.filter((row) => !pricedBelowMinimum(row)));
+      }
       await saveSection(id, "ns-equipments", {
-        rows: equipments.filter((row) => row.name_spec.trim()).map((row) => ({
+        rows: kept.map((row) => ({
           ...row,
           quantity: Number(row.quantity || 0),
         })),
@@ -457,7 +461,7 @@ export function TeacherApply({ applicationId, onOpen, onClose, onChanged }: Prop
               <span className="text-[10px] text-ink-400">共 6 个环节</span>
             </div>
             <ol className="mt-3">
-              {["教师填报", "系部初审", "专家匿名盲审", "科研处复核", "学术委员会终审", "立项公示与归档"].map((label, index, list) => (
+              {["教师填报", "系部初审", "专家匿名盲审", "科研处复核", "学术委员会终审", "拟立项公示"].map((label, index, list) => (
                 <li key={label} className="flex gap-2.5">
                   <div className="flex flex-col items-center">
                     <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-semibold ${index === 0 ? "bg-teal-600 text-white" : "border border-ink-200 bg-white text-ink-500"}`}>{index + 1}</span>
@@ -534,8 +538,8 @@ export function TeacherApply({ applicationId, onOpen, onClose, onChanged }: Prop
               </label>
               <label className="block sm:col-span-2">
                 <span className="field-label">关键词</span>
-                <Input placeholder="最多不超过 5 个，各词之间用分号隔开" value={keywords} disabled={locked} aria-invalid={issueOf("keywords") ? true : undefined} onChange={(event) => { clearIssue("keywords"); setKeywords(event.target.value); }} />
-                <p className="sheet-hint mt-1">最多不超过 5 个，各词之间用分号隔开</p>
+                <Input placeholder="最多不超过 5 个，各词之间用分号隔开" value={keywords} disabled={locked} aria-invalid={issueOf("keywords") ? true : undefined} onChange={(event) => { clearIssue("keywords"); setKeywords(limitKeywords(event.target.value)); }} />
+                <p className="sheet-hint mt-1">最多不超过 5 个，各词之间用分号隔开，当前 {keywordCount(keywords)}/5 个</p>
                 {issueOf("keywords") ? <span className="mt-1 block text-[11px] text-cinnabar">{issueOf("keywords")}</span> : null}
               </label>
               <ReadOnly label="项目类别" value={detail.project_class === "social" ? "B. 社会科学类" : detail.project_class === "dual_high" ? "D. 双高校建设专项" : "A. 自然科学类"} />
@@ -651,7 +655,10 @@ export function TeacherApply({ applicationId, onOpen, onClose, onChanged }: Prop
               onAdd={() => setEquipments([...equipments, { name_spec: "", quantity: "1", unit_price: "", funding_source: "", purpose: "" }])}
               onRemove={(index) => setEquipments(equipments.filter((_, rowIndex) => rowIndex !== index))}
             />
-            <p className="text-right text-[12px] text-ink-600">合计（元） <span className="font-semibold text-teal-800">{equipments.reduce((sum, row) => sum + Number(row.quantity || 0) * Number(row.unit_price || 0), 0).toFixed(2)}</span></p>
+            {equipments.some(pricedBelowMinimum) ? (
+              <p className="text-[12px] text-cinnabar">单价低于 5000 元的设备不列入清单，合计不含这些行。保存时会去掉它们。</p>
+            ) : null}
+            <p className="text-right text-[12px] text-ink-600">合计（元） <span className="font-semibold text-teal-800">{equipmentTotal(equipments)}</span></p>
           </Chapter>
         ) : null}
         {current?.id === "budget" ? (
@@ -756,6 +763,23 @@ export function TeacherApply({ applicationId, onOpen, onClose, onChanged }: Prop
       ) : null}
     </div>
   );
+}
+
+function pricedBelowMinimum(row: EquipmentRow) {
+  if (!row.name_spec.trim() || row.unit_price.trim() === "") return false;
+  const price = Number(row.unit_price);
+  return Number.isFinite(price) && price < 5000;
+}
+
+function listedEquipment(row: EquipmentRow) {
+  const price = Number(row.unit_price);
+  const quantity = Number(row.quantity || 0);
+  return row.name_spec.trim() !== "" && Number.isFinite(price) && price >= 5000 && quantity > 0;
+}
+
+function equipmentTotal(rows: EquipmentRow[]) {
+  const total = rows.filter(listedEquipment).reduce((sum, row) => sum + Number(row.quantity || 0) * Number(row.unit_price || 0), 0);
+  return total.toFixed(2);
 }
 
 function fillOutput(row: { complete_on?: string | null; title: string; outcome_form?: string | null; owner_name?: string | null }): OutputRow {

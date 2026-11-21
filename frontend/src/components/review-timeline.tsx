@@ -45,7 +45,7 @@ function decisionLabel(event: TimelineEvent) {
     approved: "通过",
     rejected: "不通过",
     returned: "退回",
-    established: "立项",
+    established: "拟立项",
     expert_rejected: "不予立项",
   };
   return labels[event.decision] ?? event.decision;

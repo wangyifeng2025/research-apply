@@ -29,6 +29,21 @@ function push(issues: FieldIssue[], field: string, message: string) {
   issues.push({ field, message });
 }
 
+export function keywordCount(value: string): number {
+  return value.split(/[;；]/).map((item) => item.trim()).filter(Boolean).length;
+}
+
+export function limitKeywords(value: string): string {
+  let separators = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const ch = value[index];
+    if (ch !== ";" && ch !== "；") continue;
+    separators += 1;
+    if (separators === 5) return value.slice(0, index);
+  }
+  return value;
+}
+
 export function checkBasicSection(input: {
   title: string;
   keywords: string;

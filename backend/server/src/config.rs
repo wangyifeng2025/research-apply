@@ -25,15 +25,26 @@ impl Config {
             jwt_secret: required_env("JWT_SECRET")?,
             cookie_secure: std::env::var("COOKIE_SECURE")
                 .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true")),
-            attachment_dir: std::env::var("ATTACHMENT_DIR")
-                .unwrap_or_else(|_| "data/attachments".to_owned())
-                .into(),
+            attachment_dir: absolute_path(
+                std::env::var("ATTACHMENT_DIR").unwrap_or_else(|_| "data/attachments".to_owned()),
+            ),
         })
     }
 
     pub fn database_only() -> Result<String, AppError> {
         dotenvy::dotenv().ok();
         required_env("DATABASE_URL")
+    }
+}
+
+fn absolute_path(value: String) -> PathBuf {
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
     }
 }
 

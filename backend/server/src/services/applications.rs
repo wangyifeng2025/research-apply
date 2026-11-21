@@ -1409,14 +1409,7 @@ async fn save_equipments(txn: &DatabaseTransaction, id: Uuid, body: Value) -> Re
             }
         };
         if price < sea_orm::prelude::Decimal::from(5000) {
-            return Err(invalid(
-                &format!("equipments.{index}.unit_price"),
-                &format!(
-                    "第 {} 台设备「{}」的单价低于 5000 元，不列入清单",
-                    index + 1,
-                    row.name_spec.trim()
-                ),
-            ));
+            continue;
         }
         let amount = price * sea_orm::prelude::Decimal::from(row.quantity);
         ns_equipments::ActiveModel {

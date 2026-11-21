@@ -91,7 +91,7 @@ npm run dev
 
 ## 尚未提供的能力
 
-站内通知和立项公示名单还没有实现。附件可以上传 PDF、JPG、PNG，单个不超过 20 MB，文件写在后端工作目录的 `data/attachments`。教师、系审核人和科研处可以把申报书导出为 PDF，版式按 2026 年社会科学类和自然科学类申报书；专家不能导出。Ubuntu 上安装 `fonts-noto-cjk` 并设置 `PDF_FONT`，见 [docs/服务器部署.md](docs/服务器部署.md) 的「安装依赖」。测试时不要把通知和公示当成故障。完整计划见 [docs/development-plan.md](docs/development-plan.md)。
+站内通知和拟立项公示名单还没有实现。附件可以上传 PDF、JPG、PNG，单个不超过 20 MB，文件写在后端工作目录的 `data/attachments`。教师、系审核人和科研处可以把申报书导出为 PDF，版式按 2026 年社会科学类和自然科学类申报书；专家不能导出。Ubuntu 上安装 `fonts-noto-cjk` 并设置 `PDF_FONT`，见 [docs/服务器部署.md](docs/服务器部署.md) 的「安装依赖」。测试时不要把通知和公示当成故障。完整计划见 [docs/development-plan.md](docs/development-plan.md)。
 
 ## 常用命令
 

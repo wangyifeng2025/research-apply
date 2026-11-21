@@ -20,6 +20,14 @@ pub async fn run() -> Result<(), AppError> {
     support::log::init();
 
     let config = config::Config::from_env()?;
+    match std::fs::create_dir_all(&config.attachment_dir) {
+        Ok(()) => tracing::info!(path = %config.attachment_dir.display(), "附件目录已就绪"),
+        Err(error) => tracing::error!(
+            error = %error,
+            path = %config.attachment_dir.display(),
+            "附件目录不可用，上传会失败"
+        ),
+    }
     let state = AppState::connect(&config).await?;
     let app = routes::router(state, &config)?;
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;

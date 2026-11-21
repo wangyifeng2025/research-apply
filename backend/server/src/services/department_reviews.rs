@@ -77,6 +77,10 @@ pub async fn open(
 ) -> Result<forms::ApplicationView, AppError> {
     let app = load_application(db, id).await?;
     ensure_scope(user, app.department_id)?;
+    if app.status == ApplicationStatus::Submitted {
+        align_submitted_reviews(db, std::slice::from_ref(&app)).await?;
+    }
+    let app = load_application(db, id).await?;
     if app.status != ApplicationStatus::Submitted {
         let mine = reviews::Entity::find()
             .filter(reviews::Column::ApplicationId.eq(id))
@@ -109,18 +113,42 @@ pub async fn decide(
     }
 
     let txn = db.begin().await?;
-    let saved_review = match write_decision(&txn, user, id, decision, &opinion, &input).await {
-        Ok(review) => review,
-        Err(error) => {
-            if let Err(rollback_error) = txn.rollback().await {
-                tracing::error!(error = %rollback_error, "系审核事务回滚失败");
+    let saved_review =
+        match write_decision(&txn, user, id, decision.clone(), &opinion, &input).await {
+            Ok(review) => review,
+            Err(error) => {
+                if let Err(rollback_error) = txn.rollback().await {
+                    tracing::error!(error = %rollback_error, "系审核事务回滚失败");
+                }
+                return Err(error);
             }
-            return Err(error);
-        }
-    };
+        };
     txn.commit().await?;
 
-    let saved = load_application(db, id).await?;
+    let mut saved = load_application(db, id).await?;
+    if saved.status == ApplicationStatus::Submitted {
+        match workflow::transit(
+            db,
+            id,
+            ApplicationStatus::Submitted,
+            target_status(decision),
+        )
+        .await
+        {
+            Ok(()) => saved = load_application(db, id).await?,
+            Err(error) => {
+                tracing::error!(error = %error, "系审核结论已写入，申报状态没有更新");
+                return Err(AppError::Conflict(
+                    "系审核结论已保存，但申报状态仍是待系审核，请刷新后重试".to_owned(),
+                ));
+            }
+        }
+    }
+    if saved.status == ApplicationStatus::Submitted {
+        return Err(AppError::Conflict(
+            "系审核结论已保存，但申报状态仍是待系审核，请刷新后重试".to_owned(),
+        ));
+    }
     let names = department_names(db).await?;
     let totals = budget_totals(db, std::slice::from_ref(&saved)).await?;
     Ok(to_item(&saved, &names, &totals, Some(&saved_review)))
@@ -212,10 +240,56 @@ async fn pending(
         query = query.filter(applications::Column::DepartmentId.eq(department_id));
     }
     let apps = query
+        .clone()
+        .order_by_desc(applications::Column::SubmittedAt)
+        .all(db)
+        .await?;
+    align_submitted_reviews(db, &apps).await?;
+    let apps = query
         .order_by_desc(applications::Column::SubmittedAt)
         .all(db)
         .await?;
     pack(db, &apps, &[]).await
+}
+
+/// 系审核结论已经写下、申报状态却仍是待系审核时，把状态补到和结论一致。
+async fn align_submitted_reviews(
+    db: &DatabaseConnection,
+    apps: &[applications::Model],
+) -> Result<(), AppError> {
+    let ids: Vec<Uuid> = apps
+        .iter()
+        .filter(|app| app.status == ApplicationStatus::Submitted)
+        .map(|app| app.id)
+        .collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let rows = reviews::Entity::find()
+        .filter(reviews::Column::ApplicationId.is_in(ids))
+        .filter(reviews::Column::Stage.eq(ReviewStage::Department))
+        .filter(reviews::Column::Decision.ne(ReviewDecision::Pending))
+        .all(db)
+        .await?;
+    for review in rows {
+        let target = target_status(review.decision.clone());
+        if target == ApplicationStatus::Submitted {
+            continue;
+        }
+        match workflow::transit(
+            db,
+            review.application_id,
+            ApplicationStatus::Submitted,
+            target,
+        )
+        .await
+        {
+            Ok(()) => {}
+            Err(AppError::Conflict(_)) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 async fn reviewed(

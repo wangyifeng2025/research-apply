@@ -12,6 +12,7 @@ mod profile;
 mod stats;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderValue, Method, header};
 use axum::routing::{delete, get, post, put};
 use tower_http::cors::CorsLayer;
@@ -20,6 +21,7 @@ use tower_http::trace::TraceLayer;
 use crate::config::Config;
 use crate::error::AppError;
 use crate::state::AppState;
+use crate::support::blobs::REQUEST_LIMIT;
 
 pub fn router(state: AppState, config: &Config) -> Result<Router, AppError> {
     let origin = HeaderValue::from_str(&config.cors_origin)
@@ -126,6 +128,7 @@ pub fn router(state: AppState, config: &Config) -> Result<Router, AppError> {
             "/api/expert-reviews/{id}",
             get(expert_reviews::detail).post(expert_reviews::submit),
         )
+        .layer(DefaultBodyLimit::max(REQUEST_LIMIT))
         .with_state(state)
         .layer(cors)
         .layer(TraceLayer::new_for_http()))

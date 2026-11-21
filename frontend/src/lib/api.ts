@@ -119,7 +119,7 @@ export async function apiSend<T>(path: string, init: RequestInit = {}): Promise<
   const body = (await response.json().catch(() => null)) as (ErrorBody & T) | null;
   if (!response.ok) {
     const fields = body?.fields?.filter((item) => item.message) ?? [];
-    const message = fields.length > 0 ? fields.map((item) => item.message).join("；") : (body?.error ?? "请求失败");
+    const message = fields.length > 0 ? fields.map((item) => item.message).join("；") : (body?.error ?? `请求失败（HTTP ${response.status}）`);
     throw new ApiError(response.status, message, fields);
   }
   return body as T;

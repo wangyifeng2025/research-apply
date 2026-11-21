@@ -11,13 +11,13 @@ import { Button } from "@/components/ui/button";
 import { StickyTable } from "@/components/ui/sticky-table";
 import { SideNav, WorkspaceShell } from "@/components/workspace-shell";
 import { classLabels, fetchMine, statusLabels, type MineItem } from "@/lib/applications";
-import { ApiError } from "@/lib/api";
+import { ApiError, apiSend } from "@/lib/api";
 import { readActiveLogin } from "@/lib/login";
 import { fetchTimeline, type TimelineEvent } from "@/lib/timeline";
 
-const cycleOpen = new Date(2026, 0, 1);
-const cycleClose = new Date(2026, 11, 31);
-const flow = ["提交申报", "系部初审", "科研处复核", "专家匿名盲审", "立项公示"];
+const flow = ["提交申报", "系部初审", "科研处复核", "专家匿名盲审", "拟立项公示"];
+
+type OpenCycle = { title: string; closes_at: string | null; status: string } | null;
 
 export function TeacherWorkspace() {
   const [section, setSection] = useState("desk");
@@ -27,6 +27,7 @@ export function TeacherWorkspace() {
   const [toast, setToast] = useState("");
   const name = useSyncExternalStore(subscribeLogin, teacherName, teacherNameOnServer);
   const [tracks, setTracks] = useState<Record<string, { events: TimelineEvent[]; error: string }>>({});
+  const [openCycle, setOpenCycle] = useState<OpenCycle | "loading">("loading");
 
   const reload = useCallback(async () => {
     try {
@@ -51,6 +52,13 @@ export function TeacherWorkspace() {
       }
     }
     void load();
+    apiSend<OpenCycle>("/api/cycles/current")
+      .then((cycle) => {
+        if (!cancelled) setOpenCycle(cycle);
+      })
+      .catch(() => {
+        if (!cancelled) setOpenCycle(null);
+      });
     return () => {
       cancelled = true;
     };
@@ -71,9 +79,8 @@ export function TeacherWorkspace() {
   });
   const focus = [...reviewing, ...returned, ...items].find((item) => item.status !== "draft") ?? items[0];
   const today = new Date();
-  const daysLeft = Math.max(0, Math.ceil((cycleClose.getTime() - today.getTime()) / 86_400_000));
-  const span = cycleClose.getTime() - cycleOpen.getTime();
-  const elapsed = Math.min(100, Math.max(0, Math.round(((today.getTime() - cycleOpen.getTime()) / span) * 100)));
+  const cycleOpen = openCycle !== "loading" && openCycle?.status === "open";
+  const daysLeft = daysUntil(cycleOpen && openCycle ? openCycle.closes_at : null, today);
 
   function openNew() {
     setApplicationId(null);
@@ -96,7 +103,7 @@ export function TeacherWorkspace() {
     { id: "apply", label: "项目填报", icon: "mdi:file-document-edit-outline" },
     { id: "track", label: "审核进度", icon: "mdi:timeline-clock-outline" },
     { id: "history", label: "历史申报复用", icon: "mdi:history" },
-    { id: "notice", label: "立项公示查询", icon: "mdi:bullhorn-outline", divider: true },
+    { id: "notice", label: "拟立项公示查询", icon: "mdi:bullhorn-outline", divider: true },
     { id: "message", label: "消息中心", icon: "mdi:message-text-outline", badge: returned.length ? String(returned.length) : undefined, gold: returned.length > 0 },
     { id: "profile", label: "个人资料", icon: "mdi:account-outline", divider: true },
   ];
@@ -120,10 +127,7 @@ export function TeacherWorkspace() {
                 <Icon name="mdi:calendar-clock-outline" className="text-sm text-teal-300" />
                 2026 年度申报
               </div>
-              <p className="mt-2 text-[12.5px] font-medium">距离申报截止还有 {daysLeft} 天</p>
-              <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-white/15">
-                <div className="h-full rounded-full bg-teal-400" style={{ width: `${elapsed}%` }} />
-              </div>
+              <p className="mt-2 text-[12.5px] font-medium">{cycleOpen ? (daysLeft === null ? "本批次申报进行中" : `距离申报截止还有 ${daysLeft} 天`) : openCycle === "loading" ? "正在确认申报批次" : "本批次申报已关闭"}</p>
               <Button type="button" variant="ghost" onClick={() => ping("申报指南以科研处下发的正式文件为准")} className="mt-3 h-auto w-full bg-white/10 py-1.5 text-[11px] text-ink-100 hover:bg-white/15 hover:text-white">
                 <Icon name="mdi:file-pdf-box" className="text-sm" />
                 申报说明
@@ -176,12 +180,12 @@ export function TeacherWorkspace() {
               </div>
               <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-teal-200/70 bg-teal-50/70 px-3.5 py-2.5 text-[11.5px] leading-5 text-teal-900">
                 <Icon name="mdi:bullhorn-variant-outline" className="mt-0.5 shrink-0 text-base text-teal-600" />
-                <p className="flex-1"><span className="font-medium">申报提醒：</span>2026 年度申报周期至 12 月 31 日。草稿可以继续填写，已提交项目可以查看当前环节。本页数字来自你本人的申报书。</p>
+                <p className="flex-1"><span className="font-medium">申报提醒：</span>{cycleOpen ? "草稿可以继续填写，已提交项目可以查看当前环节。本页数字来自你本人的申报书。" : openCycle === "loading" ? "正在确认本批次是否仍在申报。" : "本批次申报已关闭。已有草稿可以查看，但不能再新建或首次提交。"}</p>
               </div>
               <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
                 <Stat label="在审项目" value={String(reviewing.length)} icon="mdi:file-search-outline" note={`${items.filter((item) => item.status === "expert_reviewing").length} 项正在专家盲审`} />
                 <Stat label="待修改 / 退回" value={String(returned.length)} icon="mdi:file-alert-outline" warn note={returned.length > 0 ? "请打开申报书按退回意见修改" : "目前没有退回"} />
-                <Stat label="已立项项目" value={String(established.length)} icon="mdi:check-decagram-outline" note="立项金额在公示环节公布" />
+                <Stat label="拟立项项目" value={String(established.length)} icon="mdi:check-decagram-outline" note="金额在公示环节公布" />
                 <Stat label="本年度申报" value={String(items.length)} icon="mdi:chart-timeline-variant" note={`社科 ${socialCount} 项 · 自科与双高 ${naturalCount} 项`} />
               </div>
             </>
@@ -302,15 +306,15 @@ export function TeacherWorkspace() {
       {section === "history" ? (
         <section>
           <h1 className="text-[22px] font-semibold text-ink-900">历史申报复用</h1>
-          <p className="mt-1 text-[12.5px] text-ink-500">已立项的申报书可以打开查看。复制成新草稿还没有开通，避免把往年内容直接写成今年的申报。</p>
+          <p className="mt-1 text-[12.5px] text-ink-500">拟立项的申报书可以打开查看。复制成新草稿还没有开通，避免把往年内容直接写成今年的申报。</p>
           <div className="mt-4"><HistoryCards items={established} onOpen={openItem} /></div>
         </section>
       ) : null}
 
       {section === "notice" ? (
         <section className="rounded-xl border border-ink-200 bg-white p-5">
-          <h1 className="text-[18px] font-semibold text-ink-900">立项公示查询</h1>
-          <p className="mt-2 text-[13px] leading-6 text-ink-600">公示名单由科研处发布。你已立项的项目有 {established.length} 项，可在「我的申报」里查看状态。</p>
+          <h1 className="text-[18px] font-semibold text-ink-900">拟立项公示查询</h1>
+          <p className="mt-2 text-[13px] leading-6 text-ink-600">拟立项名单由科研处发布，院长办公会通过后才确认立项。你有 {established.length} 项拟立项，可在「我的申报」里查看状态。</p>
         </section>
       ) : null}
 
@@ -357,6 +361,13 @@ function teacherNameOnServer() {
   return "老师";
 }
 
+function daysUntil(closesAt: string | null | undefined, today: Date) {
+  if (!closesAt) return null;
+  const closes = new Date(closesAt);
+  if (Number.isNaN(closes.getTime())) return null;
+  return Math.max(0, Math.ceil((closes.getTime() - today.getTime()) / 86_400_000));
+}
+
 function hello(date: Date) {
   const hour = date.getHours();
   if (hour < 11) return "上午好";
@@ -369,7 +380,7 @@ function stageName(status: string) {
   if (status === "submitted" || status === "dept_returned" || status === "dept_rejected") return "系部初审";
   if (status === "dept_approved" || status === "office_returned" || status === "office_rejected") return "科研处复核";
   if (status === "office_approved" || status === "expert_reviewing" || status === "expert_rejected") return "专家盲审";
-  if (status === "established") return "立项公示";
+  if (status === "established") return "拟立项公示";
   return statusLabels[status] ?? status;
 }
 
@@ -466,19 +477,19 @@ function HistoryCards({ items, onOpen, onAll }: { items: MineItem[]; onOpen: (id
       <div className="flex items-center justify-between border-b border-ink-100 px-4 py-3.5">
         <div>
           <h2 className="text-[14px] font-semibold text-ink-900">历史申报复用</h2>
-          <p className="mt-0.5 text-[11px] text-ink-400">已立项项目可以打开查看。复制为新草稿尚未开通。</p>
+          <p className="mt-0.5 text-[11px] text-ink-400">拟立项项目可以打开查看。复制为新草稿尚未开通。</p>
         </div>
         {onAll ? <Button variant="subtle" size="sm" onClick={onAll}>全部记录</Button> : null}
       </div>
       {items.length === 0 ? (
-        <p className="px-4 py-6 text-[12.5px] text-ink-400">还没有已立项的申报可以复用。</p>
+        <p className="px-4 py-6 text-[12.5px] text-ink-400">还没有拟立项的申报可以复用。</p>
       ) : (
         <div className="grid gap-2.5 p-3 sm:grid-cols-3">
           {items.map((item) => (
             <div key={item.id} className="rounded-lg border border-ink-200 p-3">
               <div className="flex items-center justify-between">
                 <span className="text-[10.5px] text-ink-400">{classLabels[item.project_class]}</span>
-                <Badge className="bg-ink-900 text-white">已立项</Badge>
+                <Badge className="bg-ink-900 text-white">拟立项</Badge>
               </div>
               <p className="mt-2 line-clamp-2 text-[12px] font-medium leading-5 text-ink-800">{item.title || "未命名申报书"}</p>
               <Button variant="outline" size="sm" className="mt-2.5 w-full" onClick={() => onOpen(item.id)}>

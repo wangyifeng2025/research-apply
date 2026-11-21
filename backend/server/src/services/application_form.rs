@@ -220,6 +220,9 @@ pub(crate) fn render(source: &FormSource) -> Result<Vec<u8>, PdfError> {
     write_recommender(&mut doc, source.view.recommender.as_ref());
     doc.heading("八、项目负责人所在部门审核意见");
     write_department(&mut doc, source.department.as_ref());
+    if source.view.status == "established" {
+        doc.watermark(&["黔西南民族职业技术学院", "拟立项"]);
+    }
     doc.finish()
 }
 
@@ -1056,6 +1059,21 @@ mod tests {
         assert!(has_unicode(&social, '图'));
         assert!(has_unicode(&natural, '自'));
         assert!(has_unicode(&natural, '设'));
+        assert!(!has_unicode(&social, '拟'));
+    }
+
+    #[test]
+    fn established_form_keeps_a_forty_character_title_and_adds_a_watermark() {
+        let mut source = sample("social");
+        let title =
+            "贵州技术交易市场黔西南州专区技术经理人科技创新人才团队孵化培养基地场景研究和应用";
+        assert_eq!(title.chars().count(), 40);
+        source.view.title = Some(title.to_owned());
+        source.view.status = "established".to_owned();
+        let pdf = render(&source).expect("拟立项申报书应能生成");
+        assert!(has_unicode(&pdf, '用'));
+        assert!(has_unicode(&pdf, '拟'));
+        assert!(pdf.windows(7).any(|window| window == b"/GS1 gs"));
     }
 
     fn has_unicode(pdf: &[u8], ch: char) -> bool {

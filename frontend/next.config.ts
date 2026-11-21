@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   agentRules: false,
+  experimental: {
+    proxyClientMaxBodySize: 21 * 1024 * 1024,
+  },
   async rewrites() {
     const target = process.env.API_PROXY_TARGET ?? "http://127.0.0.1:8080";
     return [

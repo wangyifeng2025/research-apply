@@ -312,7 +312,7 @@ fn status_label(code: &str) -> &'static str {
         "office_approved" => "待指派专家",
         "expert_reviewing" => "专家盲审",
         "expert_rejected" => "不予立项",
-        "established" => "已立项",
+        "established" => "拟立项",
         _ => "其他",
     }
 }

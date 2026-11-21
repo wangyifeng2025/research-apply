@@ -217,7 +217,7 @@ export function DepartmentWorkspace() {
     setBusy(true);
     setFormError("");
     try {
-      await submitDepartmentReview(active.id, {
+      const saved = await submitDepartmentReview(active.id, {
         decision: pendingDecision,
         opinion: opinion.trim(),
         facts_accurate: checks.facts,
@@ -225,6 +225,14 @@ export function DepartmentWorkspace() {
         resources_ready: checks.resources,
         agree_to_manage: checks.manage,
       });
+      if (saved.status === "submitted") {
+        setFormError("审核结论已保存，但申报状态仍是待系审核，请点刷新后再看");
+        setPendingDecision(null);
+        reload();
+        return;
+      }
+      setPending((current) => current.filter((item) => item.id !== saved.id));
+      setReviewed((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
       setNotice(decisionCopy[pendingDecision].done);
       setPendingDecision(null);
       setActive(null);
@@ -405,11 +413,16 @@ export function DepartmentWorkspace() {
             <DialogTitle>{active?.title || "未填写项目名称"}</DialogTitle>
             <DialogDescription>
               {active
-                ? `${classLabels[active.project_class] ?? active.project_class} · ${statusLabels[active.status] ?? active.status}`
+                ? `${classLabels[active.project_class] ?? active.project_class} · ${statusLabels[detail?.status ?? active.status] ?? detail?.status ?? active.status}`
                 : "申报书"}
             </DialogDescription>
           </DialogHeader>
           <DialogBody>
+            {formError ? (
+              <p className="mb-3 rounded-lg bg-[#fdf6f6] px-3 py-2 text-[12.5px] text-cinnabar">
+                {formError}
+              </p>
+            ) : null}
             {detailError ? (
               <p className="mb-3 text-[12.5px] text-cinnabar">{detailError}</p>
             ) : null}

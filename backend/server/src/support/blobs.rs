@@ -31,12 +31,25 @@ impl LocalDirectory {
 
     pub async fn save(&self, key: &str, bytes: &[u8]) -> Result<(), AppError> {
         let path = self.location(key)?;
-        tokio::fs::create_dir_all(&self.root).await?;
+        if let Err(error) = tokio::fs::create_dir_all(&self.root).await {
+            tracing::error!(error = %error, "创建附件目录失败");
+            return Err(AppError::Unavailable(
+                "附件保存失败，请联系管理员检查附件目录".to_owned(),
+            ));
+        }
         let partial = self.root.join(format!(".{key}.partial"));
-        tokio::fs::write(&partial, bytes).await?;
+        if let Err(error) = tokio::fs::write(&partial, bytes).await {
+            tracing::error!(error = %error, "写入附件失败");
+            return Err(AppError::Unavailable(
+                "附件保存失败，请联系管理员检查附件目录".to_owned(),
+            ));
+        }
         if let Err(error) = tokio::fs::rename(&partial, &path).await {
             let _ = tokio::fs::remove_file(&partial).await;
-            return Err(error.into());
+            tracing::error!(error = %error, "保存附件失败");
+            return Err(AppError::Unavailable(
+                "附件保存失败，请联系管理员检查附件目录".to_owned(),
+            ));
         }
         Ok(())
     }
@@ -76,7 +89,16 @@ pub fn exceeds_limit(size: u64) -> bool {
 }
 
 /// 根据文件头判断类型，不信任浏览器申报的 Content-Type。
+///
+/// 允许文件开头有 UTF-8 BOM 或少量空白。部分扫描件和办公软件导出的 PDF 会这样。
 pub fn sniff(bytes: &[u8]) -> Option<DetectedFile> {
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    let offset = bytes
+        .iter()
+        .take(1024)
+        .position(|byte| !matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
+        .unwrap_or(0);
+    let bytes = bytes.get(offset..).unwrap_or(bytes);
     if bytes.starts_with(b"%PDF") {
         Some(DetectedFile::Pdf)
     } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
@@ -155,6 +177,8 @@ mod tests {
             Some(DetectedFile::Png)
         );
         assert_eq!(sniff(b"not a file"), None);
+        assert_eq!(sniff(b"\xEF\xBB\xBF%PDF-1.4"), Some(DetectedFile::Pdf));
+        assert_eq!(sniff(b"\n%PDF-1.7"), Some(DetectedFile::Pdf));
     }
 
     #[test]

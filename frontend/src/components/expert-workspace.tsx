@@ -247,7 +247,7 @@ export function ExpertWorkspace() {
                     value={score}
                     inputMode="decimal"
                     placeholder="例如 86.5"
-                    onChange={(event) => setScore(event.target.value)}
+                    onChange={(event) => setScore(clampScore(event.target.value))}
                   />
                 </label>
                 <label className="block text-[12.5px] text-ink-700">
@@ -289,6 +289,14 @@ export function ExpertWorkspace() {
       />
     </WorkspaceShell>
   );
+}
+
+function clampScore(raw: string) {
+  if (raw.trim() === "") return "";
+  const normalized = raw.match(/^\d*\.?\d{0,2}/)?.[0] ?? "";
+  if (normalized === "" || normalized === ".") return "";
+  if (Number(normalized) > 100) return "100";
+  return normalized;
 }
 
 function BlindReading({ application }: { application: BlindApplication }) {

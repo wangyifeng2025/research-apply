@@ -31,6 +31,7 @@ pub struct Document {
     margin_t: f32,
     margin_b: f32,
     glyphs: HashMap<char, (u16, u16)>,
+    watermark: Option<Vec<String>>,
 }
 
 enum Draw {
@@ -54,6 +55,12 @@ enum Draw {
         y1: f32,
         x2: f32,
         y2: f32,
+    },
+    FadeText {
+        x: f32,
+        y: f32,
+        size: f32,
+        text: String,
     },
 }
 
@@ -153,6 +160,7 @@ impl Document {
             margin_t: 42.0,
             margin_b: 40.0,
             glyphs: HashMap::new(),
+            watermark: None,
         };
         document.new_page();
         Ok(document)
@@ -216,14 +224,35 @@ impl Document {
     pub fn field(&mut self, label: &str, value: &str) {
         let size = 12.0;
         let line_h = 22.0;
-        self.ensure(line_h);
-        let baseline = PAGE_H - self.y - 14.0;
-        self.text_at(self.margin_l, baseline, size, label, 0.0);
         let x = self.margin_l + self.width(label, size) + 6.0;
         let right = PAGE_W - self.margin_r;
-        self.text_at(x, baseline, size, value, 0.0);
-        self.line(x, baseline - 3.0, right, baseline - 3.0);
-        self.y += line_h;
+        let available = (right - x).max(80.0);
+        let fitted = self.fit_size(value, size, available);
+        let lines = if value.is_empty() {
+            vec![String::new()]
+        } else {
+            self.wrap(value, fitted, available)
+        };
+        for (index, line) in lines.iter().enumerate() {
+            self.ensure(line_h);
+            let baseline = PAGE_H - self.y - 14.0;
+            if index == 0 {
+                self.text_at(self.margin_l, baseline, size, label, 0.0);
+            }
+            self.text_at(x, baseline, fitted, line, 0.0);
+            self.line(x, baseline - 3.0, right, baseline - 3.0);
+            self.y += line_h;
+        }
+    }
+
+    pub fn watermark(&mut self, lines: &[&str]) {
+        let owned: Vec<String> = lines.iter().map(|line| (*line).to_owned()).collect();
+        for line in &owned {
+            for ch in line.chars() {
+                self.remember(ch);
+            }
+        }
+        self.watermark = Some(owned);
     }
 
     pub fn boxed(&mut self, text: &str, min_height: f32) {
@@ -303,6 +332,7 @@ impl Document {
     }
 
     pub fn finish(mut self) -> Result<Vec<u8>, PdfError> {
+        self.paint_watermark();
         self.add_footers();
         let mut remapper = GlyphRemapper::new();
         let mut old_ids: Vec<u16> = self.glyphs.values().map(|(gid, _)| *gid).collect();
@@ -459,6 +489,46 @@ impl Document {
     fn line(&mut self, x1: f32, y1: f32, x2: f32, y2: f32) {
         if let Some(page) = self.pages.last_mut() {
             page.push(Draw::Line { x1, y1, x2, y2 });
+        }
+    }
+
+    fn fit_size(&mut self, text: &str, size: f32, max_width: f32) -> f32 {
+        if text.is_empty() {
+            return size;
+        }
+        let width = self.width(text, size);
+        if width <= max_width || width <= 0.0 {
+            return size;
+        }
+        (size * max_width / width).max(9.0)
+    }
+
+    fn paint_watermark(&mut self) {
+        let Some(lines) = self.watermark.clone() else {
+            return;
+        };
+        let sizes = [28.0_f32, 18.0];
+        let gap = 10.0;
+        let mut measured = Vec::new();
+        let mut block = 0.0;
+        for (index, line) in lines.iter().enumerate() {
+            let size = sizes.get(index).copied().unwrap_or(16.0);
+            let width = self.width(line, size);
+            measured.push((line.clone(), size, width));
+            block += size + gap;
+        }
+        let start = (PAGE_H + block) / 2.0;
+        for page in &mut self.pages {
+            let mut cursor = start;
+            for (line, size, width) in &measured {
+                page.push(Draw::FadeText {
+                    x: (PAGE_W - width) / 2.0,
+                    y: cursor - size,
+                    size: *size,
+                    text: line.clone(),
+                });
+                cursor -= size + gap;
+            }
         }
     }
 
@@ -748,7 +818,7 @@ fn write_pdf(
     let pages_id = writer.reserve();
     for content_id in &content_ids {
         page_ids.push(writer.obj(&format!(
-            "<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 {w} {h}] /Contents {content_id} 0 R /Resources << /Font << /F1 {type0_id} 0 R >> >> >>",
+            "<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 {w} {h}] /Contents {content_id} 0 R /Resources << /Font << /F1 {type0_id} 0 R >> /ExtGState << /GS1 << /Type /ExtGState /ca 0.22 /CA 0.22 >> >> >> >>",
             w = pt(PAGE_W),
             h = pt(PAGE_H)
         )));
@@ -816,6 +886,21 @@ fn emit_page(ops: &[Draw], cid_of: &HashMap<char, u16>) -> String {
                         y1 = pt(*y1),
                         x2 = pt(*x2),
                         y2 = pt(*y2)
+                    ),
+                );
+            }
+            Draw::FadeText { x, y, size, text } => {
+                let hex = encode(text, cid_of);
+                if hex.is_empty() {
+                    continue;
+                }
+                push_line(
+                    &mut out,
+                    &format!(
+                        "q /GS1 gs BT /F1 {size} Tf 0.35 0.35 0.35 rg 1 0 0 1 {x} {y} Tm <{hex}> Tj ET Q",
+                        size = pt(*size),
+                        x = pt(*x),
+                        y = pt(*y)
                     ),
                 );
             }
@@ -1004,5 +1089,38 @@ impl PdfWriter {
                 .as_bytes(),
         );
         self.body
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forty_character_cover_title_stays_inside_the_page() {
+        let mut doc = Document::new("测试").expect("本机应有中文字体");
+        let title: String = std::iter::repeat_n('贵', 40).collect();
+        doc.field("项  目  名  称：", &title);
+        let right = PAGE_W - doc.margin_r;
+        let drawn: Vec<(f32, f32, String)> = doc.pages[0]
+            .iter()
+            .filter_map(|op| match op {
+                Draw::Text { x, size, text, .. } if text != "项  目  名  称：" => {
+                    Some((*x, *size, text.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        let mut seen = String::new();
+        for (x, size, text) in drawn {
+            let width = doc.width(&text, size);
+            assert!(
+                x + width <= right + 0.6,
+                "封面文字超出页面：{text}，右端 {}，边界 {right}",
+                x + width
+            );
+            seen.push_str(&text);
+        }
+        assert_eq!(seen, title);
     }
 }
