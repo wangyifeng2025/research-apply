@@ -5,3 +5,4 @@
 /frontend/.next
 /frontend/.env.local
 /docs/*
+/target
